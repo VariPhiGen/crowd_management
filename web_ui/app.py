@@ -112,6 +112,8 @@ def dashboard():
                 frame_stride   = int(request.form.get('frame_stride', 2))
                 ocr_interval   = int(request.form.get('ocr_interval', 0))
                 classes        = request.form.get('classes', 'person,car,motorcycle,truck').strip()
+                confidence     = float(request.form.get('confidence', 0.50))
+                track_point    = request.form.get('track_point', 'bottom').strip()
                 fusion_time    = float(request.form.get('fusion_time_tol', 1.0))
                 fusion_dist    = float(request.form.get('fusion_dist_tol', 2.5))
 
@@ -121,6 +123,8 @@ def dashboard():
                     "--frame-stride",        str(frame_stride),
                     "--ocr-interval",        str(ocr_interval),
                     "--classes",             classes,
+                    "--confidence",          str(confidence),
+                    "--track-point",         track_point,
                     "--timestamp-tolerance", str(fusion_time),
                     "--fusion-dist-tol",     str(fusion_dist),
                 ]

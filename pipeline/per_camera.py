@@ -36,22 +36,25 @@ def _run_camera_in_thread(args: tuple) -> str:
     (
         camera_id, config_dir, output_dir,
         model_name, model_confidence, model_classes,
+        model_track_point,
         append_output, frame_stride, ocr_interval,
     ) = args
 
-    # Per-thread model — own YOLO+ByteTrack state, own CUDA allocation
+    # Per-thread model — own detector + ByteTrack state, own CUDA allocation
     cam_model = PersonDetector(
         model_name     = model_name,
         confidence     = model_confidence,
         target_classes = model_classes,
+        track_point    = model_track_point,
     )
 
     processor = PerCameraProcessor(
-        camera_id     = camera_id,
-        config_dir    = config_dir,
-        output_dir    = output_dir,
-        model         = cam_model,
-        append_output = append_output,
+        camera_id          = camera_id,
+        config_dir         = config_dir,
+        output_dir         = output_dir,
+        model              = cam_model,
+        append_output      = append_output,
+        track_point_override = model_track_point,
     )
     return processor.process_video(
         frame_stride = frame_stride,
@@ -74,6 +77,7 @@ class PerCameraProcessor:
         output_dir: str,
         model: PersonDetector,
         append_output: bool = False,
+        track_point_override: Optional[str] = None,
     ) -> None:
         self.camera_id = camera_id
         self.append_output = append_output
@@ -123,8 +127,12 @@ class PerCameraProcessor:
 
         # ── Initialize Sub-Modules ───────────────────────────────────────────
 
-        # Per-camera track_point — read from cameras.json; fall back to "bottom"
-        self._track_point = self.camera_config.get("track_point", "bottom")
+        # Per-camera track_point — CLI/UI override > cameras.json > default "bottom"
+        self._track_point = (
+            track_point_override
+            if track_point_override is not None
+            else self.camera_config.get("track_point", "bottom")
+        )
 
         # 1. Lens Correction
         self.lens_corrector = LensCorrector(self.camera_id, str(self.config_dir) + "/")
@@ -437,10 +445,13 @@ class MultiCameraRunner:
         model_path: str = "yolov8n.pt",
         append_output: bool = False,
         target_classes: "str | list[int] | None" = None,
+        confidence: float = 0.50,
+        track_point: str = "bottom",
     ) -> None:
         self.config_dir    = Path(config_dir)
         self.output_dir    = Path(output_dir)
         self.append_output = append_output
+        self.track_point   = track_point
         self.output_dir.mkdir(parents=True, exist_ok=True)
 
         cameras_cfg_path = self.config_dir / "cameras.json"
@@ -449,13 +460,18 @@ class MultiCameraRunner:
 
         self.cameras = cameras_data.get("cameras", [])
 
-        # Keep a reference detector only to read model_name / confidence
-        # for passing to worker threads — each thread creates its own instance.
+        # Reference detector carries model_name / confidence / track_point
+        # for worker threads — each thread creates its own instance.
         logger.info(
-            "MultiCameraRunner: %d cameras, model=%s, append=%s",
-            len(self.cameras), model_path, append_output,
+            "MultiCameraRunner: %d cameras, model=%s, conf=%.2f, track_point=%s, append=%s",
+            len(self.cameras), model_path, confidence, track_point, append_output,
         )
-        self.detector = PersonDetector(model_name=model_path, target_classes=target_classes)
+        self.detector = PersonDetector(
+            model_name     = model_path,
+            target_classes = target_classes,
+            confidence     = confidence,
+            track_point    = track_point,
+        )
 
     def run_all(
         self,
@@ -508,6 +524,7 @@ class MultiCameraRunner:
                 self.detector.model_name,
                 self.detector.confidence,
                 self.detector.target_classes,   # pass resolved class IDs
+                self.track_point,
                 self.append_output,
                 frame_stride,
                 ocr_interval,

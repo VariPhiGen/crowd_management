@@ -81,6 +81,26 @@
                                 </select>
                                 <div class="form-text">Detection model targets</div>
                             </div>
+                            <div class="col-auto">
+                                <label class="form-label fw-semibold mb-1" for="confidence">
+                                    Confidence
+                                </label>
+                                <input type="number" class="form-control form-control-sm"
+                                       id="confidence" name="confidence"
+                                       value="0.50" min="0.10" max="0.95" step="0.05" style="width:90px">
+                                <div class="form-text">Min detection score</div>
+                            </div>
+                            <div class="col-auto">
+                                <label class="form-label fw-semibold mb-1" for="track_point">
+                                    Tracking Point
+                                </label>
+                                <select class="form-select form-select-sm" id="track_point" name="track_point" style="width:170px">
+                                    <option value="bottom" selected>Bottom — feet (default)</option>
+                                    <option value="center">Center — mid-body</option>
+                                    <option value="top">Top — head</option>
+                                </select>
+                                <div class="form-text">Bbox point projected to floor</div>
+                            </div>
                         </div>
 
                         <!-- ── Fusion thresholds ───────────────────────────── -->

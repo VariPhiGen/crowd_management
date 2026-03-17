@@ -1247,6 +1247,10 @@ Examples
         help="Skip interactive windows and user prompts (saves validation checks to file)",
     )
     parser.add_argument(
+        "--confidence", type=float, default=0.50, metavar="CONF",
+        help="Detection confidence threshold (0.0–1.0, default 0.50)",
+    )
+    parser.add_argument(
         "--track-point",
         choices=["bottom", "center", "top"],
         default="bottom",
@@ -1688,6 +1692,8 @@ def main() -> None:
             model_path     = args.model,
             append_output  = args.append,
             target_classes = args.classes,
+            confidence     = args.confidence,
+            track_point    = args.track_point,
         )
         csv_paths = runner.run_all(
             sequential    = False,
