@@ -363,6 +363,58 @@ def cmd_ssh():
     os.execlp("ssh", "ssh", "-i", str(KEY_PATH), f"ubuntu@{ip}")
 
 
+def cmd_deploy():
+    """Open port 80, start instance, wait for SSH, run deploy_web.sh."""
+    ec2 = _ec2()
+
+    # ── Open port 80 in security group ────────────────────────────────────────
+    print("\n[1/4] Opening port 80 in security group...")
+    try:
+        ec2.authorize_security_group_ingress(
+            GroupId    = SECURITY_GROUP,
+            IpProtocol = "tcp",
+            FromPort   = 80,
+            ToPort     = 80,
+            CidrIp     = "0.0.0.0/0",
+        )
+        print("  ✓ Port 80 (HTTP) opened")
+    except ClientError as e:
+        if "InvalidPermission.Duplicate" in str(e):
+            print("  ✓ Port 80 already open")
+        else:
+            raise
+
+    # ── Start instance ────────────────────────────────────────────────────────
+    print("\n[2/4] Starting instance...")
+    info = cmd_start()
+    ip   = info.get("PublicIpAddress", "—")
+
+    # ── Wait for SSH ──────────────────────────────────────────────────────────
+    print("\n[3/4] Waiting for SSH...")
+    _wait_for_ssh(ip)
+
+    # ── Run deploy_web.sh on EC2 ──────────────────────────────────────────────
+    print("\n[4/4] Running web deployment script on EC2...")
+    deploy_script = Path(__file__).parent / "deploy_web.sh"
+    result = subprocess.run(
+        ["ssh", "-o", "StrictHostKeyChecking=no",
+         "-i", str(KEY_PATH),
+         f"{SSH_USER}@{ip}",
+         f"bash -s"],
+        input=deploy_script.read_text(),
+        text=True,
+    )
+    if result.returncode != 0:
+        print(f"\n  ❌  Deployment failed (exit {result.returncode})")
+        print(f"  Instance left running for inspection.")
+        print(f"  SSH: ssh -i ~/.ssh/crimenabi-key.pem ubuntu@{ip}")
+        sys.exit(1)
+
+    print(f"\n  🌐  Dashboard URL: http://{ip}")
+    print(f"  Instance stays RUNNING while dashboard is live.")
+    print(f"  Stop with: python3 deploy/manage_instance.py stop")
+
+
 def cmd_terminate():
     ec2 = _ec2()
     iid = _load_instance_id()
@@ -431,6 +483,7 @@ COMMANDS = {
     "start":     (cmd_start,     "Start the stopped instance"),
     "stop":      (cmd_stop,      "Stop the running instance (saves compute cost)"),
     "status":    (cmd_status,    "Show instance state, IP, SSH command"),
+    "deploy":    (cmd_deploy,    "Open port 80 + install Nginx/Gunicorn + start dashboard"),
     "run":       (cmd_run,       "start → git pull → pipeline → upload results → stop"),
     "ssh":       (cmd_ssh,       "Print SSH command (or open SSH session)"),
     "terminate": (cmd_terminate, "PERMANENTLY delete instance and EBS (project done)"),
@@ -453,3 +506,5 @@ if __name__ == "__main__":
         fn(camera_arg=args.camera or "")
     else:
         fn()
+
+
