@@ -11,3 +11,4 @@ pytest>=7.0.0
 boto3
 flask
 werkzeug
+gdown>=4.7.1

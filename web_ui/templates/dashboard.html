@@ -212,21 +212,31 @@
                     </div>
                     <div class="modal-body">
                         <div class="mb-3">
-                            <label class="form-label">Camera ID</label>
-                            <input type="text" class="form-control" name="cam_id" placeholder="e.g. cam9" required>
-                            <div class="form-text">Must be exactly equal to the folder name in output/</div>
+                            <label class="form-label fw-semibold">Camera ID</label>
+                            <input type="text" class="form-control" name="cam_id" placeholder="e.g. cam_9" required>
+                            <div class="form-text">Short ID used in filenames and logs — e.g. <code>cam_9</code></div>
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">Name</label>
+                            <label class="form-label fw-semibold">Display Name</label>
                             <input type="text" class="form-control" name="name" placeholder="e.g. North Gate" required>
+                            <div class="form-text">Human-readable label shown in the dashboard</div>
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">Source Output S3 Prefix</label>
-                            <input type="text" class="form-control" name="source" placeholder="e.g. s3://bucket-name/videos/cam9/" required>
+                            <label class="form-label fw-semibold">Video Source — S3 URI</label>
+                            <input type="text" class="form-control" name="source" placeholder="s3://bucket-name/videos/cam_9/" required>
+                            <div class="form-text">
+                                S3 folder containing this camera's input videos.<br>
+                                The pipeline downloads and processes every video file in this prefix.<br>
+                                <strong>Example:</strong> <code>s3://crimenabi-data-variphi/cam_9/</code>
+                            </div>
                         </div>
                         <div class="mb-3">
-                            <label class="form-label">S3 Output Folder</label>
+                            <label class="form-label fw-semibold">Output Label</label>
                             <input type="text" class="form-control" name="s3_output_folder" placeholder="e.g. pipeline_outputs" value="pipeline_outputs" required>
+                            <div class="form-text">
+                                Tag stored in camera config — used to group output CSVs.<br>
+                                Pipeline results always save to the local <code>output/</code> folder on EC2.
+                            </div>
                         </div>
                     </div>
                     <div class="modal-footer">
