@@ -178,14 +178,27 @@ class PersonDetector:
         self,
         model_name: str = "yolov8m.pt",
         confidence: float = 0.50,
-        device: str = "cpu",
+        device: str = "auto",
         track_point: str = "bottom",
     ) -> None:
         self.model_name   = model_name
         self.confidence   = confidence
-        self.device       = device
         self.track_point  = track_point   # "bottom" | "center" | "top"
         self.model        = None
+
+        # Auto-select best available device
+        if device == "auto":
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    device = "cuda:0"
+                elif torch.backends.mps.is_available():
+                    device = "mps"
+                else:
+                    device = "cpu"
+            except Exception:
+                device = "cpu"
+        self.device = device
 
         try:
             from ultralytics import YOLO

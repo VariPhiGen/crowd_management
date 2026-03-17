@@ -58,8 +58,14 @@ class TimestampExtractor:
             logger.error("[%s] easyocr module not found. Extraction disabled.", self.camera_id)
             self.reader = None
         else:
-            # Initialize with CPU explicitly as they ran YOLO on CPU (Apple Silicon MPS can be used if easyocr supports it, but cpu is safe)
-            self.reader = easyocr.Reader(['en'], gpu=False)
+            # Auto-detect GPU — EasyOCR is 5-10x faster on GPU
+            try:
+                import torch
+                _use_gpu = torch.cuda.is_available()
+            except Exception:
+                _use_gpu = False
+            logger.info("[%s] EasyOCR initializing (gpu=%s)...", self.camera_id, _use_gpu)
+            self.reader = easyocr.Reader(['en'], gpu=_use_gpu)
 
         # State tracking for fallback and drift detection
         self._last_successful_time: Optional[datetime] = None

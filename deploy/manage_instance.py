@@ -478,17 +478,17 @@ apt-get update -q
 apt-get install -y -q build-essential git wget curl unzip python3.10 python3.10-venv \
     python3-pip libgl1 libglib2.0-0 libsm6 libxrender1 libxext6 ffmpeg
 
-# NVIDIA driver
-apt-get install -y -q ubuntu-drivers-common
-ubuntu-drivers autoinstall || true
-
-# CUDA 12.1
+# NVIDIA driver + CUDA — use the official CUDA runfile which installs both
+# together. More reliable than ubuntu-drivers on cloud instances.
 wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2204/x86_64/cuda-keyring_1.0-1_all.deb
 dpkg -i cuda-keyring_1.0-1_all.deb
 apt-get update -q
-apt-get install -y -q cuda-toolkit-12-1
+# Install CUDA 12.1 full stack — includes driver + toolkit
+apt-get install -y -q cuda-12-1
 echo 'export PATH=/usr/local/cuda-12.1/bin:$PATH' >> /etc/environment
 echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.1/lib64:$LD_LIBRARY_PATH' >> /etc/environment
+export PATH=/usr/local/cuda-12.1/bin:$PATH
+export LD_LIBRARY_PATH=/usr/local/cuda-12.1/lib64:$LD_LIBRARY_PATH
 
 # Python venv
 python3.10 -m venv {VENV}
