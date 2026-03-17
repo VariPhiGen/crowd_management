@@ -490,6 +490,12 @@ echo 'export LD_LIBRARY_PATH=/usr/local/cuda-12.1/lib64:$LD_LIBRARY_PATH' >> /et
 export PATH=/usr/local/cuda-12.1/bin:$PATH
 export LD_LIBRARY_PATH=/usr/local/cuda-12.1/lib64:$LD_LIBRARY_PATH
 
+# The CUDA package installs kernel modules for the latest AWS kernel.
+# Ensure that kernel is the default boot target so nvidia-smi works on reboot.
+LATEST_KERNEL=$(ls /boot/vmlinuz-* | sort -V | tail -1 | sed 's|/boot/vmlinuz-||')
+sed -i "s|^GRUB_DEFAULT=.*|GRUB_DEFAULT=\"Advanced options for Ubuntu>Ubuntu, with Linux ${LATEST_KERNEL}\"|" /etc/default/grub
+update-grub
+
 # Python venv
 python3.10 -m venv {VENV}
 source {VENV}/bin/activate
