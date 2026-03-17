@@ -3,6 +3,7 @@
 # ──────────────────────────────────────────────
 config/aws_credentials.json
 credentials/
+deploy/.instance_id
 
 # ──────────────────────────────────────────────
 # Large YOLO model weights (download on-demand)
