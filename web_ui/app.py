@@ -97,8 +97,12 @@ def dashboard():
     cameras = get_cameras()
     message = None
     error = None
+    # Default: all cameras selected; remembered across POST so checkboxes persist
+    all_cam_ids = [c['id'] for c in cameras]
+    selected_cameras = all_cam_ids  # overwritten on POST
 
     if request.method == 'POST':
+        selected_cameras = request.form.getlist('camera_ids') or all_cam_ids
         action = request.form.get('pipeline_action')
         try:
             env = os.environ.copy()
@@ -229,7 +233,8 @@ def dashboard():
                 'logs': "".join(logs)
             }
 
-    return render_template('dashboard.html', cameras=cameras, message=message, error=error, active_jobs=active_jobs)
+    return render_template('dashboard.html', cameras=cameras, message=message, error=error,
+                           active_jobs=active_jobs, selected_cameras=selected_cameras)
 
 def parse_s3_uri(uri):
     """Parse s3://bucket/prefix into bucket and prefix."""

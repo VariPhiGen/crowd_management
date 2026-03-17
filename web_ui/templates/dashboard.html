@@ -60,7 +60,8 @@
                                      style="min-width:120px">
                                     <input class="form-check-input cam-checkbox" type="checkbox"
                                            name="camera_ids" value="{{ cam.id }}"
-                                           id="cam_cb_{{ cam.id }}" checked>
+                                           id="cam_cb_{{ cam.id }}"
+                                           {{ 'checked' if cam.id in selected_cameras else '' }}>
                                     <label class="form-check-label" for="cam_cb_{{ cam.id }}">
                                         <span class="fw-semibold small">{{ cam.id }}</span><br>
                                         <span class="text-muted" style="font-size:0.75rem">{{ cam.name }}</span>

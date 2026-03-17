@@ -1687,20 +1687,26 @@ def main() -> None:
         print(f"\n[Pipeline] Validating cameras for full processing...")
         with open(CAMERAS_CFG) as _f:
             _cfg = json.load(_f)
-            
-        # Quick validation
-        for cam in _cfg.get("cameras", []):
+
+        # Resolve camera filter early so validation only checks selected cameras
+        _cam_ids = [c.strip() for c in args.cameras.split(",")] if args.cameras else None
+        _cams_to_run = (
+            [c for c in _cfg.get("cameras", []) if c["id"] in _cam_ids]
+            if _cam_ids else _cfg.get("cameras", [])
+        )
+        if _cam_ids:
+            print(f"  Camera filter: {_cam_ids}")
+
+        # Quick validation — only for the cameras that will actually run
+        for cam in _cams_to_run:
             if "homography_matrix" not in cam:
                 print(f"  ✗  Camera {cam['id']} is missing homography. Run --calibrate.")
                 sys.exit(1)
             if "ocr_region" not in cam:
                 print(f"  ✗  Camera {cam['id']} is missing OCR region. Run --ocr-region.")
                 sys.exit(1)
-                
-        print("  ✓  All configs validated. Starting YOLO extraction...")
-        
-        # 1. Pipeline Runner
-        _cam_ids = [c.strip() for c in args.cameras.split(",")] if args.cameras else None
+
+        print("  ✓  All selected configs validated. Starting detection...")
         runner = MultiCameraRunner(
             config_dir     = str(CONFIG_DIR),
             output_dir     = str(OUTPUT_DIR),
