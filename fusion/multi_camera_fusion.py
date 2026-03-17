@@ -292,10 +292,22 @@ class CrossingFuser:
         for p in csv_paths:
             try:
                 df = pd.read_csv(p)
-                df["timestamp"] = pd.to_datetime(df["timestamp"], format="mixed")
+                before = len(df)
+                df["timestamp"] = pd.to_datetime(df["timestamp"], format="mixed", errors="coerce")
+                bad_rows = df["timestamp"].isna().sum()
+                if bad_rows:
+                    logger.warning(
+                        "CSV %s: %d/%d rows had unparseable timestamps — dropped.",
+                        p, bad_rows, before,
+                    )
+                    df = df.dropna(subset=["timestamp"])
+                if df.empty:
+                    logger.error("CSV %s has no valid rows after timestamp parse — skipping.", p)
+                    continue
                 dfs.append(df)
                 if "camera_id" in df.columns:
                     all_cam_ids.update(df["camera_id"].dropna().unique())
+                logger.info("Loaded %s: %d events (dropped %d bad rows)", p, len(df), bad_rows)
             except Exception as e:
                 logger.error("Failed to read CSV %s: %s", p, e)
 
