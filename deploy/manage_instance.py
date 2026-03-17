@@ -140,7 +140,7 @@ def _wait_for_ssh(ip: str, timeout: int = 180):
              "-o", "ConnectTimeout=5",
              "-o", "BatchMode=yes",
              "-i", str(KEY_PATH),
-             f"{SSH_USER}@{ip}", "echo ok"],
+             f"{SSH_USER}@{ip}", "/bin/echo ok"],
             capture_output=True, text=True
         )
         if ret.returncode == 0:
@@ -358,7 +358,7 @@ echo '--- done ---'
         ["ssh", "-o", "StrictHostKeyChecking=no",
          "-i", str(KEY_PATH),
          f"{SSH_USER}@{ip}",
-         remote_script],
+         f"/bin/bash -c {repr(remote_script)}"],
         text=True
     )
 
@@ -432,7 +432,7 @@ def cmd_deploy():
         ["ssh", "-o", "StrictHostKeyChecking=no",
          "-i", str(KEY_PATH),
          f"{SSH_USER}@{ip}",
-         f"bash -s"],
+         "/bin/bash -s"],
         input=deploy_script.read_text(),
         text=True,
     )
