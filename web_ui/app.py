@@ -419,10 +419,12 @@ def camera_detail(cam_id):
                         VIDEO_EXTS = {'.mp4', '.avi', '.mov', '.mkv', '.ts'}
                         uploaded, failed, warnings = [], [], []
 
-                        # Split input into individual lines — supports both:
-                        #   • single folder URL  (one line, contains "folders/")
-                        #   • multiple file URLs (one per line — bypasses 50-file limit)
-                        urls = [u.strip() for u in raw_input.splitlines() if u.strip()]
+                        # Split input into URLs — supports three formats:
+                        #   • single folder URL  (one entry, contains "folders/")
+                        #   • multiple file URLs, one per line
+                        #   • multiple file URLs, comma-separated (or mixed newline+comma)
+                        import re as _re
+                        urls = [u.strip() for u in _re.split(r'[\n,]+', raw_input) if u.strip()]
 
                         def _upload_file(local_path: str, fname: str):
                             s3_key = f"{prefix}{fname}"

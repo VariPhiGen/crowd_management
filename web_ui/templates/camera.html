@@ -60,16 +60,16 @@
                         <input type="hidden" name="action" value="drive_import">
                         <div class="mb-2">
                             <label class="form-label fw-semibold">Google Drive URL(s)</label>
-                            <textarea class="form-control font-monospace" name="drive_url" rows="5"
-                                      placeholder="Option A — folder URL (up to 50 files):&#10;https://drive.google.com/drive/folders/ABC123...&#10;&#10;Option B — individual file links, one per line (no limit):&#10;https://drive.google.com/file/d/FILE_ID_1/view?usp=sharing&#10;https://drive.google.com/file/d/FILE_ID_2/view?usp=sharing"
+                            <textarea class="form-control font-monospace" name="drive_url" rows="6"
+                                      placeholder="Option A — one folder URL (up to 50 files):&#10;https://drive.google.com/drive/folders/ABC123...&#10;&#10;Option B — one file link per line (no limit):&#10;https://drive.google.com/file/d/ID1/view&#10;https://drive.google.com/file/d/ID2/view&#10;&#10;Option C — comma-separated file links (no limit):&#10;https://drive.google.com/file/d/ID1/view, https://drive.google.com/file/d/ID2/view, ..."
                                       required></textarea>
                         </div>
 
                         <div class="alert alert-info py-2 small mb-2">
-                            <strong>Two modes:</strong><br>
-                            <b>Folder URL</b> — paste one folder link (works for ≤ 50 files).<br>
-                            <b>Individual file links</b> — paste each file's sharing link, <em>one per line</em>.
-                            This has <strong>no file-count limit</strong> and is the correct approach for NVR folders with hundreds of recordings.
+                            <strong>Three modes — all work:</strong><br>
+                            <b>A. Folder URL</b> — one folder link (≤ 50 files).<br>
+                            <b>B. One link per line</b> — paste each file's sharing link on a new line. No file-count limit.<br>
+                            <b>C. Comma-separated</b> — paste all links separated by commas in one go. No file-count limit.
                         </div>
                         <div class="alert alert-warning py-2 small mb-3">
                             ⚠️ Set Drive sharing to <strong>"Anyone with the link"</strong> before importing.
