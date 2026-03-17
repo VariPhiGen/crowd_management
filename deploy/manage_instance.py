@@ -53,8 +53,8 @@ from botocore.exceptions import ClientError
 REGION         = "ap-northeast-1"
 AMI_ID         = "ami-0d52744d6551d851e"   # Ubuntu 22.04
 INSTANCE_TYPE  = "g5.2xlarge"
-KEY_NAME       = "crimenabi-key"
-KEY_PATH       = Path.home() / ".ssh" / "crimenabi-key.pem"   # local path to .pem
+KEY_NAME       = "crimenabi-deploy-key"
+KEY_PATH       = Path.home() / ".ssh" / "crimenabi-deploy-key.pem"
 SECURITY_GROUP = "sg-0592d60a80c313f1c"
 IAM_PROFILE    = "variphi-ec2-analysis-profile"
 S3_BUCKET      = "crimenabi-data-variphi"
@@ -461,7 +461,7 @@ def cmd_terminate():
         return
 
     ec2.terminate_instances(InstanceIds=[iid])
-    _wait_for_state(ec2, iid, "terminated")
+    _wait_for_state(ec2, iid, "terminated", timeout=600)
     INSTANCE_ID_FILE.unlink(missing_ok=True)
     print(f"  ✅  Instance {iid} terminated. All charges stopped.")
 
