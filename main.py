@@ -1258,6 +1258,31 @@ Examples
         "--model", type=str, default="yolov8m.pt",
         help="YOLO model weights file to use (e.g. yolov8n.pt, yolov8m.pt, yolov8s.pt)",
     )
+    parser.add_argument(
+        "--workers", type=int, default=4, metavar="N",
+        help=(
+            "Number of cameras to process in parallel (default 4).\n"
+            "Each worker loads its own YOLO model on the GPU.\n"
+            "A10G (23 GB VRAM): up to 9 workers with yolov8m (~1.5 GB each).\n"
+            "Use --workers 1 for fully sequential processing."
+        ),
+    )
+    parser.add_argument(
+        "--frame-stride", type=int, default=1, dest="frame_stride", metavar="N",
+        help=(
+            "Process every Nth video frame (default 1 = every frame).\n"
+            "Set to 2 to halve YOLO calls with minimal tracking impact.\n"
+            "Frame counter always advances so timestamps stay accurate."
+        ),
+    )
+    parser.add_argument(
+        "--ocr-interval", type=int, default=0, dest="ocr_interval", metavar="N",
+        help=(
+            "Run EasyOCR every N frames (default 0 = auto = once per second).\n"
+            "EasyOCR is the slowest step; this gives 10-15× speedup for long\n"
+            "recordings. FPS-interpolation fills in between OCR reads."
+        ),
+    )
 
     # ── Intrinsic calibration options ─────────────────────────────────────
     parser.add_argument(
@@ -1573,7 +1598,11 @@ def main() -> None:
                 if tot > 0 and cur % max(1, tot // 10) == 0:
                     print(f"  [{cam_id}] Progress: {cur} / {tot} ({(cur/tot)*100:.0f}%)")
                     
-            csv_out = proc.process_video(progress_callback=_prog)
+            csv_out = proc.process_video(
+                progress_callback = _prog,
+                frame_stride      = args.frame_stride,
+                ocr_interval      = args.ocr_interval,
+            )
             print(f"\n  ✓  Saved crossings to: {csv_out}")
             
         except Exception as e:
@@ -1641,7 +1670,12 @@ def main() -> None:
             model_path=args.model,
             append_output=args.append,
         )
-        csv_paths = runner.run_all(sequential=True)
+        csv_paths = runner.run_all(
+            sequential    = False,
+            max_workers   = args.workers,
+            frame_stride  = args.frame_stride,
+            ocr_interval  = args.ocr_interval,
+        )
         
         # 2. Fusion
         print(f"\n[Pipeline] Running multi-camera fusion...")

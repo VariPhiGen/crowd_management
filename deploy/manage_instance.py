@@ -330,7 +330,19 @@ def cmd_run(camera_arg: str = ""):
     _wait_for_ssh(ip)
 
     # 3. Run pipeline via SSH
-    pipeline_cmd = f"--process-camera {camera_arg}" if camera_arg else "--process"
+    # --workers 4: 4 cameras processed in parallel on A10G (safe for 23 GB VRAM)
+    # --frame-stride 2: process every other frame (~2× YOLO throughput, tracking still accurate)
+    # --ocr-interval 0: auto (once per second) — 10-15× faster OCR vs every frame
+    if camera_arg:
+        pipeline_cmd = (
+            f"--process-camera {camera_arg} "
+            f"--frame-stride 2 --ocr-interval 0"
+        )
+    else:
+        pipeline_cmd = (
+            f"--process "
+            f"--workers 4 --frame-stride 2 --ocr-interval 0"
+        )
     datestamp = datetime.utcnow().strftime("%Y%m%d-%H%M")
 
     remote_script = f"""

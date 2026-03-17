@@ -140,6 +140,45 @@ class S3VideoSource:
             local_path = self._download(key)
             yield local_path
 
+    def iter_videos_prefetch(self, ahead: int = 1) -> Iterator[Path]:
+        """
+        Like ``iter_videos()`` but downloads the *next* ``ahead`` videos in a
+        background thread while the current video is being processed.
+
+        This eliminates the S3 download stall between consecutive videos — the
+        next file is ready immediately when the caller finishes the current one.
+
+        Parameters
+        ----------
+        ahead : int
+            How many videos to prefetch ahead (default 1 — enough for most
+            cases; set higher only if processing is faster than download).
+        """
+        from concurrent.futures import ThreadPoolExecutor, Future
+        from collections import deque
+
+        keys = list(self._keys)
+        if not keys:
+            return
+
+        pending: deque[Future] = deque()
+
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="s3pre") as pool:
+            # Kick off the first `ahead + 1` downloads immediately
+            prefill = min(ahead + 1, len(keys))
+            for i in range(prefill):
+                pending.append(pool.submit(self._download, keys[i]))
+
+            next_submit = prefill
+            for _ in keys:
+                # Start the next download in the background before yielding
+                if next_submit < len(keys):
+                    pending.append(pool.submit(self._download, keys[next_submit]))
+                    next_submit += 1
+
+                local_path = pending.popleft().result()
+                yield local_path
+
     def delete_local(self, path: Path) -> None:
         """
         Delete the locally downloaded copy of a video.

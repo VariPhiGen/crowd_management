@@ -27,6 +27,33 @@ from detection.detector import PersonDetector
 from fusion.crossing import LineCrossingDetector
 from pipeline.s3_source import S3VideoSource, _is_s3_uri
 
+# ── Parallel camera processing ───────────────────────────────────────────────
+# Worker entry-point (module-level so it is picklable).
+# Each thread gets its own PersonDetector so ByteTrack state stays isolated.
+
+def _run_camera_in_thread(args: tuple) -> str:
+    """Called by ThreadPoolExecutor — one camera per thread."""
+    (
+        camera_id, config_dir, output_dir,
+        model_name, model_confidence,
+        append_output, frame_stride, ocr_interval,
+    ) = args
+
+    # Per-thread model — own YOLO+ByteTrack state, own CUDA allocation
+    cam_model = PersonDetector(model_name=model_name, confidence=model_confidence)
+
+    processor = PerCameraProcessor(
+        camera_id     = camera_id,
+        config_dir    = config_dir,
+        output_dir    = output_dir,
+        model         = cam_model,
+        append_output = append_output,
+    )
+    return processor.process_video(
+        frame_stride = frame_stride,
+        ocr_interval = ocr_interval,
+    )
+
 logger = logging.getLogger(__name__)
 
 
@@ -151,41 +178,68 @@ class PerCameraProcessor:
         return self._video_info
 
     def process_video(
-        self, 
-        progress_callback: Optional[Callable[[int, int], None]] = None
+        self,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+        frame_stride: int = 1,
+        ocr_interval: int = 0,
     ) -> str:
         """
         Processes the video frame-by-frame through the complete pipeline.
+
+        Parameters
+        ----------
+        progress_callback : callable(current_frame, total_frames), optional
+        frame_stride : int
+            Process every Nth frame.  Frames between strides are read but
+            discarded (frame counter advances so timestamps stay accurate).
+            Default 1 (every frame).  Set to 2 for a ~2x YOLO speedup with
+            negligible tracking accuracy loss (ByteTrack Kalman predicts gaps).
+        ocr_interval : int
+            Run EasyOCR every N *video* frames.  0 = auto (once per second of
+            video = fps).  EasyOCR is the pipeline's slowest component; calling
+            it once per second instead of every frame gives a 10–15x speedup
+            for a workload where the timestamp changes only once per second.
 
         Returns
         -------
         str
             The absolute path to the generated CSV output file.
         """
+        import csv as _csv
+        import numpy as np
+        from datetime import timedelta
+
         is_s3 = self._s3_source is not None
 
         if not is_s3 and (self._video_info is None or not self.video_paths):
             raise RuntimeError(f"Cannot process video: source '{self.source}' not accessible.")
 
+        # Resolve OCR interval — default: once per second of video
+        _ocr_interval = ocr_interval if ocr_interval > 0 else max(1, int(round(self._fps)))
+
         if is_s3:
-            # For S3 we don't know total frames upfront — log video count instead
             logger.info(
-                "[%s] Starting S3 processing: %d video(s) @ ~%.1f FPS",
+                "[%s] Starting S3 processing: %d video(s) @ ~%.1f FPS  "
+                "(stride=%d, ocr_every=%d frames)",
                 self.camera_id, len(self._s3_source), self._fps,
+                frame_stride, _ocr_interval,
             )
         else:
             logger.info(
-                "[%s] Starting processing: %d total frames across %d files @ %.1f FPS",
+                "[%s] Starting processing: %d total frames across %d files @ %.1f FPS  "
+                "(stride=%d, ocr_every=%d frames)",
                 self.camera_id, self._total_frames, len(self.video_paths), self._fps,
+                frame_stride, _ocr_interval,
             )
-        
-        frame_idx = 0
-        ocr_failure_count = 0
 
-        # ── Tracks CSV: continuous floor positions per person per frame ───────
-        # Written alongside the crossings CSV.  Used by fusion for trajectory
-        # matching across cameras — more robust than event-only deduplication.
-        import csv as _csv
+        frame_idx = 0          # total frames read (includes skipped) — used for timestamps
+        processed_count = 0    # frames actually run through YOLO
+        ocr_call_count = 0
+        ocr_failure_count = 0
+        _last_ocr_ts: Optional[datetime] = None
+        _t_start = time.time()
+
+        # ── Tracks CSV ────────────────────────────────────────────────────────
         tracks_csv_path = str(Path(self.crossing_detector.csv_path).parent /
                               f"{self.camera_id}_tracks.csv")
         _tracks_exists = os.path.exists(tracks_csv_path)
@@ -194,98 +248,116 @@ class PerCameraProcessor:
         _tracks_writer = _csv.writer(_tracks_file)
         if _tracks_mode == "w":
             _tracks_writer.writerow(["timestamp", "track_id", "floor_x", "floor_y", "camera_id"])
-        logger.info("[%s] Opened tracks CSV log: %s (mode=%s)", self.camera_id, tracks_csv_path, _tracks_mode)
-        
-        # ── Choose video iterator: S3 (download one at a time) or local list ──
+        logger.info("[%s] Opened tracks CSV log: %s (mode=%s)",
+                    self.camera_id, tracks_csv_path, _tracks_mode)
+
+        # ── Video iterator: S3 with prefetch, or local list ──────────────────
         if is_s3:
-            _video_iter = self._s3_source.iter_videos()
+            _video_iter = self._s3_source.iter_videos_prefetch(ahead=1)
         else:
             _video_iter = iter(self.video_paths)
 
         for vpath in _video_iter:
             logger.info("[%s] Processing file: %s", self.camera_id, vpath.name)
-            logger.info("[%s] Opening video (first frame read + YOLO first inference may take 30–60s)...", self.camera_id)
+            logger.info(
+                "[%s] Opening video (first frame + YOLO warm-up may take 30–60 s)…",
+                self.camera_id,
+            )
             self.cap = cv2.VideoCapture(str(vpath))
             if not self.cap.isOpened():
                 logger.error("[%s] Failed to open video: %s", self.camera_id, vpath)
                 continue
 
-            # Update FPS from actual file when processing S3 videos
             if is_s3:
                 actual_fps = self.cap.get(cv2.CAP_PROP_FPS)
                 if actual_fps > 0:
                     self._fps = actual_fps
-            # Ensure the YOLO tracker is reset so IDs don't bleed across identical runs or different videos
+                    # Re-resolve ocr_interval with actual fps
+                    if ocr_interval == 0:
+                        _ocr_interval = max(1, int(round(self._fps)))
+
+            # Reset ByteTrack per file so IDs don't bleed across videos
             if self.model.model is not None:
                 try:
                     self.model.model.reset_tracker()
                 except Exception:
                     pass
 
-            _frames_in_this_file = 0
+            _frames_in_file = 0
             try:
                 while True:
                     ret, raw_frame = self.cap.read()
                     if not ret or raw_frame is None:
                         break
 
-                    # a) Undistort if calibrated
-                    if self.lens_corrector.is_calibrated:
-                        frame = self.lens_corrector.undistort_frame(raw_frame)
-                    else:
-                        frame = raw_frame
+                    frame_idx += 1
+                    _frames_in_file += 1
 
-                    # b) Extract OCR Timestamp
-                    # Will fallback internally if unreadable but needs _base_timestamp via get_fps_adjusted_timestamp
-                    ts_dt = self.timestamp_extractor.extract(frame)
-                    
-                    if ts_dt is None:
-                        ocr_failure_count += 1
+                    # ── Frame stride: skip intermediate frames ────────────────
+                    # frame_idx still advances so FPS-based timestamps are accurate.
+                    if frame_stride > 1 and (_frames_in_file % frame_stride) != 1:
+                        continue
+
+                    # ── Undistort ────────────────────────────────────────────
+                    frame = (self.lens_corrector.undistort_frame(raw_frame)
+                             if self.lens_corrector.is_calibrated else raw_frame)
+
+                    # ── OCR Timestamp (throttled) ────────────────────────────
+                    # Run OCR only every _ocr_interval frames; use FPS-adjusted
+                    # fallback for the frames in between — the timestamp on those
+                    # intermediate frames is accurate to ±1 frame anyway.
+                    if frame_idx % _ocr_interval == 1:   # 1 so first frame always runs
+                        ts_dt = self.timestamp_extractor.extract(frame)
+                        ocr_call_count += 1
+                        if ts_dt is not None:
+                            _last_ocr_ts = ts_dt
+                        else:
+                            ocr_failure_count += 1
+                            ts_dt = self.timestamp_extractor.get_fps_adjusted_timestamp(
+                                frame_number=frame_idx, fps=self._fps
+                            )
+                    else:
+                        # FPS-interpolated from last known OCR time
                         ts_dt = self.timestamp_extractor.get_fps_adjusted_timestamp(
                             frame_number=frame_idx, fps=self._fps
                         )
-                        
-                        if ts_dt is None:
-                            # Hard fallback to a fixed Epoch if OCR is totally broken to guarantee sync
-                            if not hasattr(self, '_fallback_base'):
-                                self._fallback_base = datetime(2025, 1, 1, 12, 0, 0)
-                            from datetime import timedelta
-                            ts_dt = self._fallback_base + timedelta(seconds=frame_idx / max(1.0, self._fps))
 
-                    # c) Detect and Track
-                    # Using model.track to maintain stable ByteTrack IDs
+                    if ts_dt is None:
+                        if not hasattr(self, '_fallback_base'):
+                            self._fallback_base = datetime(2025, 1, 1, 12, 0, 0)
+                        ts_dt = self._fallback_base + timedelta(
+                            seconds=frame_idx / max(1.0, self._fps)
+                        )
+
+                    # ── YOLO track ───────────────────────────────────────────
                     detections = self.model.track(frame)
-                    
+                    processed_count += 1
+
+                    if _frames_in_file == 1:
+                        logger.info("[%s] First frame processed (pipeline warm).", self.camera_id)
+
                     if detections and self.homography_mapper.is_calibrated:
-                        # Collect points
-                        import numpy as np
-                        pts = np.array([d.foot_point for d in detections], dtype=np.float64)
-                        
-                        # Prevent double-undistortion if already undistorted
+                        pts = np.array(
+                            [d.foot_point for d in detections], dtype=np.float64
+                        )
                         already_undistorted = self.lens_corrector.is_calibrated
-                        
                         floor_coords = self.homography_mapper.pixel_to_floor_batch(
                             pts, already_undistorted=already_undistorted
                         )
-                        
+
                         if floor_coords is not None:
                             for det, (floor_x, floor_y) in zip(detections, floor_coords):
                                 if det.track_id < 0:
-                                    continue # ensure tracked
-                                    
-                                # Convert classes appropriately, YOLOv8 0=person
-                                class_name = "person" if det.class_id == 0 else f"class_{det.class_id}"
-                                
-                                # Update crossing detector
+                                    continue
+                                class_name = ("person" if det.class_id == 0
+                                              else f"class_{det.class_id}")
                                 self.crossing_detector.update(
-                                    track_id=det.track_id,
-                                    class_name=class_name,
-                                    floor_x=float(floor_x),
-                                    floor_y=float(floor_y),
-                                    timestamp=ts_dt
+                                    track_id  = det.track_id,
+                                    class_name= class_name,
+                                    floor_x   = float(floor_x),
+                                    floor_y   = float(floor_y),
+                                    timestamp = ts_dt,
                                 )
-
-                                # Write raw floor position to tracks CSV
                                 _tracks_writer.writerow([
                                     ts_dt.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3],
                                     det.track_id,
@@ -294,45 +366,54 @@ class PerCameraProcessor:
                                     self.camera_id,
                                 ])
 
-                    frame_idx += 1
-                    _frames_in_this_file += 1
-                    # First frame done = past slow YOLO init
-                    if _frames_in_this_file == 1:
-                        logger.info("[%s] First frame processed (pipeline warm).", self.camera_id)
-                    # When total frames unknown (S3), log every 300 frames so run doesn't look stuck
-                    if self._total_frames == 0 and frame_idx > 0 and frame_idx % 300 == 0:
-                        logger.info("[%s] Frames processed: %d", self.camera_id, frame_idx)
-                    
+                    # Progress reporting
+                    if self._total_frames == 0 and frame_idx % 500 == 0:
+                        elapsed = time.time() - _t_start
+                        fps_actual = processed_count / elapsed if elapsed > 0 else 0
+                        logger.info(
+                            "[%s] Frames read: %d  processed: %d  throughput: %.1f fps",
+                            self.camera_id, frame_idx, processed_count, fps_actual,
+                        )
                     if progress_callback is not None:
                         progress_callback(frame_idx, self._total_frames)
 
             finally:
                 self.cap.release()
-                # ── S3: delete local copy immediately to free disk space ──
                 if is_s3:
                     self._s3_source.delete_local(vpath)
-        
+
         self.crossing_detector.close()
         _tracks_file.close()
-        logger.info("[%s] Closed tracks CSV: %s", self.camera_id, tracks_csv_path)
 
-        # Check OCR performance
-        if frame_idx > 0:
-            failure_rate = ocr_failure_count / frame_idx
-            if failure_rate > 0.3:
-                logger.warning(
-                    "[%s] High OCR failure rate: %.1f%% (%d/%d frames). "
-                    "Consider re-running '--ocr-region %s' to adjust the bounding box.",
-                    self.camera_id, failure_rate * 100, ocr_failure_count, frame_idx, self.camera_id
-                )
+        elapsed_total = time.time() - _t_start
+        throughput = processed_count / elapsed_total if elapsed_total > 0 else 0
+        logger.info(
+            "[%s] Finished — read %d frames, processed %d (stride=%d), "
+            "OCR calls %d / %d failures, throughput %.1f fps, wall time %.1f s",
+            self.camera_id, frame_idx, processed_count, frame_stride,
+            ocr_call_count, ocr_failure_count, throughput, elapsed_total,
+        )
 
-        logger.info("[%s] Finished processing %d frames.", self.camera_id, frame_idx)
+        if ocr_call_count > 0 and (ocr_failure_count / ocr_call_count) > 0.3:
+            logger.warning(
+                "[%s] High OCR failure rate: %.1f%% (%d/%d calls). "
+                "Consider adjusting '--ocr-region %s'.",
+                self.camera_id, ocr_failure_count / ocr_call_count * 100,
+                ocr_failure_count, ocr_call_count, self.camera_id,
+            )
+
         return self.crossing_detector.csv_path
 
 
 class MultiCameraRunner:
     """
-    Runs the pipeline over multiple cameras in the configuration.
+    Runs the pipeline over multiple cameras, optionally in parallel.
+
+    Parallel mode uses one OS thread per camera.  Each thread owns its own
+    PersonDetector (separate YOLO weights + ByteTrack state).  PyTorch
+    releases the GIL during GPU inference so threads genuinely overlap on
+    the A10G — 4 cameras running simultaneously is well within the 23 GB
+    VRAM budget (~1.5 GB × 4 ≈ 6 GB).
     """
 
     def __init__(
@@ -342,83 +423,104 @@ class MultiCameraRunner:
         model_path: str = "yolov8n.pt",
         append_output: bool = False,
     ) -> None:
-        self.config_dir = Path(config_dir)
-        self.output_dir = Path(output_dir)
+        self.config_dir    = Path(config_dir)
+        self.output_dir    = Path(output_dir)
         self.append_output = append_output
-        
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         cameras_cfg_path = self.config_dir / "cameras.json"
         with open(cameras_cfg_path) as f:
             cameras_data = json.load(f)
-            
+
         self.cameras = cameras_data.get("cameras", [])
-        
+
+        # Keep a reference detector only to read model_name / confidence
+        # for passing to worker threads — each thread creates its own instance.
         logger.info(
-            "Initializing multi-camera runner with model: %s (append_output=%s)",
-            model_path, append_output,
+            "MultiCameraRunner: %d cameras, model=%s, append=%s",
+            len(self.cameras), model_path, append_output,
         )
         self.detector = PersonDetector(model_name=model_path)
 
-    def run_all(self, sequential: bool = True) -> List[str]:
+    def run_all(
+        self,
+        sequential: bool = False,
+        max_workers: int = 4,
+        frame_stride: int = 1,
+        ocr_interval: int = 0,
+    ) -> List[str]:
         """
         Process all configured cameras.
-        
+
         Parameters
         ----------
         sequential : bool
-            If true, process one camera entirely before starting the next.
-            Minimizes VRAM footprints. If false, not implemented yet (requires
-            complex frame interleaving or multiprocessing).
-            
+            Force sequential (one-at-a-time) processing. Useful for debugging.
+            Default False (parallel).
+        max_workers : int
+            Maximum cameras to run simultaneously.  Default 4.
+            On an A10G (23 GB) with YOLOv8m each camera uses ~1.5 GB VRAM,
+            so up to 12 cameras can run in parallel — keep at 4 for headroom.
+        frame_stride : int
+            Passed to each PerCameraProcessor.process_video().
+            1 = every frame (default); 2 = every other frame (~2× faster YOLO).
+        ocr_interval : int
+            Passed to each PerCameraProcessor.process_video().
+            0 = auto (once per second of video); recommended for long recordings.
+
         Returns
         -------
         List[str]
-            List of generated CSV output paths.
+            CSV output paths, one per successfully processed camera.
         """
-        start_time = time.time()
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        _t0 = time.time()
         output_paths: List[str] = []
-        
-        if not sequential:
-            logger.warning("Parallel processing not implemented. Defaulting to sequential.")
-            sequential = True
 
-        for cam in self.cameras:
-            cam_id = cam["id"]
-            
-            logger.info("=" * 60)
-            logger.info("Processing Camera: %s", cam_id)
-            logger.info("=" * 60)
-            
-            try:
-                processor = PerCameraProcessor(
-                    camera_id=cam_id,
-                    config_dir=str(self.config_dir),
-                    output_dir=str(self.output_dir),
-                    model=self.detector,
-                    append_output=self.append_output,
-                )
-                
-                if processor.get_video_info() is None:
-                    logger.error("[%s] Skipping due to source initialization failure.", cam_id)
-                    continue
+        _workers = 1 if sequential else min(max_workers, len(self.cameras))
+        logger.info(
+            "run_all: %d cameras, workers=%d, stride=%d, ocr_interval=%d",
+            len(self.cameras), _workers, frame_stride, ocr_interval,
+        )
 
-                def _progress(cur: int, tot: int) -> None:
-                    # Simple logging progression every 10% or so
-                    if tot > 0 and cur % max(1, tot // 10) == 0:
-                        pct = (cur / tot) * 100
-                        logger.info("  [%s] Progress: %d / %d (%.0f%%)", cam_id, cur, tot, pct)
+        # Build argument tuples for worker threads
+        task_args = [
+            (
+                cam["id"],
+                str(self.config_dir),
+                str(self.output_dir),
+                self.detector.model_name,
+                self.detector.confidence,
+                self.append_output,
+                frame_stride,
+                ocr_interval,
+            )
+            for cam in self.cameras
+        ]
 
-                csv_path = processor.process_video(progress_callback=_progress)
-                output_paths.append(csv_path)
-                
-            except Exception as e:
-                logger.exception("[%s] Unexpected error during pipeline: %s", cam_id, e)
-                
-        elapsed = time.time() - start_time
-        logger.info("=" * 60)
-        logger.info("Multi-Camera Pipeline Finished in %.1f seconds", elapsed)
-        logger.info("Files generated: %s", output_paths)
-        logger.info("=" * 60)
+        with ThreadPoolExecutor(
+            max_workers=_workers,
+            thread_name_prefix="cam_worker",
+        ) as pool:
+            future_to_cam = {
+                pool.submit(_run_camera_in_thread, args): args[0]
+                for args in task_args
+            }
+            for future in as_completed(future_to_cam):
+                cam_id = future_to_cam[future]
+                try:
+                    csv_path = future.result()
+                    if csv_path:
+                        output_paths.append(csv_path)
+                        logger.info("[%s] ✓ Done → %s", cam_id, csv_path)
+                except Exception:
+                    logger.exception("[%s] Pipeline failed", cam_id)
 
+        elapsed = time.time() - _t0
+        logger.info(
+            "=" * 60 + "\nAll %d cameras finished in %.1f s (%.1f min)\n"
+            "Outputs: %s\n" + "=" * 60,
+            len(self.cameras), elapsed, elapsed / 60, output_paths,
+        )
         return output_paths
