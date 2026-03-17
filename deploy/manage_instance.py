@@ -36,7 +36,6 @@ Usage
 """
 
 import argparse
-import base64
 import json
 import os
 import subprocess
@@ -170,8 +169,9 @@ def cmd_launch():
                 f"  Use 'start' to resume, or 'terminate' first to create a new one."
             )
 
+    # boto3 auto-base64-encodes string UserData — pass raw script directly
     setup_script = _build_setup_user_data()
-    encoded_ud   = base64.b64encode(setup_script.encode()).decode()
+    encoded_ud   = setup_script
 
     print("\n" + "=" * 60)
     print("  Launching g5.2xlarge (first-time setup ~15 min)")
