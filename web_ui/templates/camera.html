@@ -24,6 +24,7 @@
         <div>
             <a href="/camera/{{ camera.id }}/ocr_region" class="btn btn-warning me-2">Set OCR Region</a>
             <a href="/camera/{{ camera.id }}/calibrate" class="btn btn-info me-2">Calibrate Homography</a>
+            <a href="/camera/{{ camera.id }}/coverage" class="btn btn-success me-2">🗺 Draw Coverage</a>
             <form method="POST" action="/camera/{{ camera.id }}/delete" class="d-inline" onsubmit="return confirm('Remove camera {{ camera.name }} ({{ camera.id }}) from config?');">
                 <button type="submit" class="btn btn-outline-danger">Delete Camera</button>
             </form>

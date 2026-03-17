@@ -392,6 +392,14 @@
                 <div class="card-body">
                     <p class="small text-muted mb-2"><strong>Source:</strong> <br> <span class="text-truncate d-inline-block" style="max-width: 100%;">{{ cam.source }}</span></p>
                     <a href="/camera/{{ cam.id }}" class="btn btn-sm btn-outline-primary w-100 mb-2">Manage S3 Uploads</a>
+                    <a href="/camera/{{ cam.id }}/coverage" class="btn btn-sm btn-outline-success w-100 mb-2">
+                        🗺 Draw Coverage Polygon
+                        {% if cam.floor_coverage_polygon %}
+                        <span class="badge bg-success ms-1">{{ cam.floor_coverage_polygon | length }}pts</span>
+                        {% else %}
+                        <span class="badge bg-warning text-dark ms-1">not set</span>
+                        {% endif %}
+                    </a>
                     <form method="POST" action="/camera/{{ cam.id }}/delete" class="d-inline w-100" onsubmit="return confirm('Remove camera {{ cam.name }} ({{ cam.id }}) from config?');">
                         <button type="submit" class="btn btn-sm btn-outline-danger w-100">Delete Camera</button>
                     </form>

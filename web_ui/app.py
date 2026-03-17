@@ -756,6 +756,35 @@ def camera_ocr_region(cam_id):
 
     return render_template('ocr_region.html', camera=camera)
 
+@app.route('/camera/<cam_id>/coverage', methods=['GET', 'POST'])
+def camera_coverage(cam_id):
+    """Interactive canvas UI for drawing the floor coverage polygon."""
+    cameras = get_cameras()
+    camera  = next((c for c in cameras if c['id'] == cam_id), None)
+    if not camera:
+        return "Camera not found", 404
+
+    if request.method == 'POST':
+        try:
+            data = request.get_json()
+            polygon = data.get('polygon')   # list of [floor_x, floor_y] in metres
+            if not polygon or len(polygon) < 3:
+                return jsonify({'success': False, 'error': 'Need at least 3 corner points.'})
+            with open(CAMERAS_CFG, 'r') as f:
+                cfg_data = json.load(f)
+            for c in cfg_data.get('cameras', []):
+                if c['id'] == cam_id:
+                    c['floor_coverage_polygon'] = [[float(p[0]), float(p[1])] for p in polygon]
+                    break
+            with open(CAMERAS_CFG, 'w') as f:
+                json.dump(cfg_data, f, indent=4)
+            return jsonify({'success': True, 'count': len(polygon)})
+        except Exception as e:
+            return jsonify({'success': False, 'error': str(e)})
+
+    return render_template('coverage.html', camera=camera)
+
+
 @app.route('/camera/<cam_id>/calibrate', methods=['GET', 'POST'])
 def camera_calibrate(cam_id):
     """Interactive canvas UI for selecting homography calibration points."""

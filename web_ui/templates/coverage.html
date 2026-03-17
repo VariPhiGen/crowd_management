@@ -1,0 +1,377 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Floor Coverage Polygon — {{ camera.name }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        #canvas-wrap {
+            position: relative;
+            display: inline-block;
+            background: #000;
+            box-shadow: 0 4px 8px rgba(0,0,0,.2);
+        }
+        canvas { display: block; cursor: crosshair; }
+        .step-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 26px; height: 26px;
+            border-radius: 50%;
+            font-weight: 700;
+            font-size: .8rem;
+            background: #0d6efd;
+            color: #fff;
+            flex-shrink: 0;
+        }
+    </style>
+</head>
+<body class="bg-light">
+
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
+    <div class="container">
+        <a class="navbar-brand" href="/">Crimenabi</a>
+        <div class="d-flex gap-2">
+            <a href="/camera/{{ camera.id }}" class="btn btn-outline-light btn-sm">← Back to Camera</a>
+            <a href="/logout" class="btn btn-danger btn-sm">Logout</a>
+        </div>
+    </div>
+</nav>
+
+<div class="container mb-5">
+    <h3 class="mb-1">
+        Floor Coverage Polygon
+        <span class="badge bg-secondary fs-6 ms-1">{{ camera.id }}</span>
+    </h3>
+    <p class="text-muted mb-4">{{ camera.name }}</p>
+
+    <!-- Instructions -->
+    <div class="alert alert-info mb-4">
+        <strong>How it works:</strong>
+        Click the <strong>corners of the floor area visible to this camera</strong> on the image below —
+        going around the perimeter (clockwise or counter-clockwise).
+        Each click is automatically projected to floor metres using the saved homography.
+        Add at least <strong>3 corners</strong>, then click <em>Save Coverage Polygon</em>.
+        The polygon is used by <em>Auto-compute Floor Config</em> and overlap-zone detection.
+    </div>
+
+    {% if not camera.homography_matrix %}
+    <div class="alert alert-warning">
+        ⚠ This camera has no homography yet.
+        <a href="/camera/{{ camera.id }}/calibrate" class="alert-link">Run homography calibration first</a>
+        so pixel clicks can be auto-converted to floor metres.
+        You can still draw the polygon manually by editing the coordinates in the table.
+    </div>
+    {% endif %}
+
+    <div class="row g-4">
+        <!-- ── Canvas ── -->
+        <div class="col-lg-8">
+            <p id="loading-msg" class="text-muted my-5 text-center">Loading camera frame…</p>
+            <div id="canvas-wrap" style="display:none;">
+                <canvas id="cvs"></canvas>
+            </div>
+        </div>
+
+        <!-- ── Sidebar ── -->
+        <div class="col-lg-4">
+
+            <!-- Existing polygon badge -->
+            {% if camera.floor_coverage_polygon %}
+            <div class="alert alert-success py-2 small mb-3">
+                ✅ Existing polygon: <strong>{{ camera.floor_coverage_polygon | length }} corners</strong> saved.
+                Loading it onto the canvas…
+            </div>
+            {% endif %}
+
+            <!-- Corner table -->
+            <div class="card shadow-sm mb-3">
+                <div class="card-header bg-white d-flex justify-content-between align-items-center py-2">
+                    <span class="fw-semibold">Polygon Corners</span>
+                    <span class="badge bg-primary" id="pt-count">0 pts</span>
+                </div>
+                <div class="card-body p-2" style="max-height:320px;overflow-y:auto;">
+                    <table class="table table-sm mb-0" id="pt-table">
+                        <thead>
+                            <tr>
+                                <th style="width:28px">#</th>
+                                <th>Floor X (m)</th>
+                                <th>Floor Y (m)</th>
+                                <th></th>
+                            </tr>
+                        </thead>
+                        <tbody id="pt-body">
+                            <tr id="empty-row">
+                                <td colspan="4" class="text-center text-muted small py-3">Click corners on the image.</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Status -->
+            <div id="status-msg" class="alert alert-warning small py-2 mb-3">
+                Click at least 3 corners to enable saving.
+            </div>
+
+            <!-- Buttons -->
+            <div class="d-grid gap-2">
+                <button id="btn-save" class="btn btn-success" disabled>
+                    💾 Save Coverage Polygon
+                </button>
+                <button id="btn-clear" class="btn btn-outline-secondary" disabled>
+                    Clear All Corners
+                </button>
+            </div>
+
+            <div id="save-result" class="alert mt-3" style="display:none;"></div>
+
+            <!-- Steps guide -->
+            <div class="card mt-4 shadow-sm">
+                <div class="card-header bg-white py-2"><span class="fw-semibold small">After saving…</span></div>
+                <div class="card-body p-3">
+                    <div class="d-flex gap-2 align-items-start mb-2">
+                        <span class="step-badge">1</span>
+                        <span class="small">Repeat for every other camera.</span>
+                    </div>
+                    <div class="d-flex gap-2 align-items-start mb-2">
+                        <span class="step-badge">2</span>
+                        <span class="small">On the dashboard → <em>Floor Configuration</em> → click <strong>Auto-compute from Cameras</strong>.</span>
+                    </div>
+                    <div class="d-flex gap-2 align-items-start">
+                        <span class="step-badge">3</span>
+                        <span class="small">Click <strong>Regenerate Edges</strong> to rebuild the counting grid.</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+// ── Data from server ───────────────────────────────────────────────────────
+const CAM_ID      = {{ camera.id | tojson }};
+const HAS_HOMO    = {{ (camera.homography_matrix is not none and camera.homography_matrix) | tojson }};
+const HOMOGRAPHY  = HAS_HOMO ? {{ (camera.homography_matrix or []) | tojson }} : null;
+const EXISTING_PX = {{ (camera.calibration_points.image_points  if camera.calibration_points else []) | tojson }};
+const EXISTING_FL = {{ (camera.calibration_points.floor_points   if camera.calibration_points else []) | tojson }};
+const SAVED_POLY  = {{ (camera.floor_coverage_polygon or []) | tojson }};
+
+// ── Canvas setup ───────────────────────────────────────────────────────────
+const cvs  = document.getElementById('cvs');
+const ctx  = cvs.getContext('2d');
+const wrap = document.getElementById('canvas-wrap');
+
+let IMG_W = 1, IMG_H = 1;
+let corners = [];   // [{px, py, fx, fy}]  px/py = pixel, fx/fy = floor metres
+
+const img = new Image();
+img.src   = `/api/camera/${CAM_ID}/frame`;
+
+img.onload = () => {
+    document.getElementById('loading-msg').style.display = 'none';
+    wrap.style.display = 'inline-block';
+    IMG_W = img.naturalWidth;
+    IMG_H = img.naturalHeight;
+    cvs.width  = IMG_W;
+    cvs.height = IMG_H;
+    // Fit to container
+    const maxW = wrap.parentElement.clientWidth;
+    if (IMG_W > maxW) { cvs.style.width = '100%'; cvs.style.height = 'auto'; }
+
+    // Pre-load saved polygon converted back to pixel space
+    if (SAVED_POLY.length >= 3 && HAS_HOMO) {
+        SAVED_POLY.forEach(fp => {
+            const px = floorToPixel(fp[0], fp[1]);
+            if (px) corners.push({ px: px[0], py: px[1], fx: fp[0], fy: fp[1] });
+        });
+    }
+    redraw();
+    updateUI();
+};
+img.onerror = () => {
+    document.getElementById('loading-msg').innerHTML =
+        '<span class="text-danger">Failed to load frame. Check S3 source.</span>';
+};
+
+// ── Homography helpers ─────────────────────────────────────────────────────
+function pixelToFloor(px, py) {
+    if (!HOMOGRAPHY) return null;
+    // H is stored row-major [[h00,h01,h02],[h10,h11,h12],[h20,h21,h22]]
+    const H = HOMOGRAPHY;
+    const w = H[2][0]*px + H[2][1]*py + H[2][2];
+    if (Math.abs(w) < 1e-10) return null;
+    const fx = (H[0][0]*px + H[0][1]*py + H[0][2]) / w;
+    const fy = (H[1][0]*px + H[1][1]*py + H[1][2]) / w;
+    return [fx, fy];
+}
+
+function floorToPixel(fx, fy) {
+    if (!HOMOGRAPHY) return null;
+    // Invert H for back-projection  (simple 3x3 inversion)
+    const H = HOMOGRAPHY;
+    // det
+    const a = H[0], b = H[1], c = H[2];
+    const det = a[0]*(b[1]*c[2]-b[2]*c[1]) - a[1]*(b[0]*c[2]-b[2]*c[0]) + a[2]*(b[0]*c[1]-b[1]*c[0]);
+    if (Math.abs(det) < 1e-12) return null;
+    const inv = [
+        [(b[1]*c[2]-b[2]*c[1])/det, (a[2]*c[1]-a[1]*c[2])/det, (a[1]*b[2]-a[2]*b[1])/det],
+        [(b[2]*c[0]-b[0]*c[2])/det, (a[0]*c[2]-a[2]*c[0])/det, (a[2]*b[0]-a[0]*b[2])/det],
+        [(b[0]*c[1]-b[1]*c[0])/det, (a[1]*c[0]-a[0]*c[1])/det, (a[0]*b[1]-a[1]*b[0])/det],
+    ];
+    const w = inv[2][0]*fx + inv[2][1]*fy + inv[2][2];
+    if (Math.abs(w) < 1e-10) return null;
+    const px = (inv[0][0]*fx + inv[0][1]*fy + inv[0][2]) / w;
+    const py = (inv[1][0]*fx + inv[1][1]*fy + inv[1][2]) / w;
+    return [px, py];
+}
+
+// ── Mouse handler ──────────────────────────────────────────────────────────
+function getCanvasPos(e) {
+    const r  = cvs.getBoundingClientRect();
+    const sx = IMG_W / r.width;
+    const sy = IMG_H / r.height;
+    return [(e.clientX - r.left) * sx, (e.clientY - r.top) * sy];
+}
+
+cvs.addEventListener('click', e => {
+    const [px, py] = getCanvasPos(e);
+    const floor    = pixelToFloor(px, py);
+    corners.push({
+        px: Math.round(px), py: Math.round(py),
+        fx: floor ? parseFloat(floor[0].toFixed(3)) : 0.0,
+        fy: floor ? parseFloat(floor[1].toFixed(3)) : 0.0,
+    });
+    redraw();
+    updateUI();
+});
+
+// ── Canvas drawing ─────────────────────────────────────────────────────────
+function redraw() {
+    ctx.drawImage(img, 0, 0);
+
+    if (corners.length === 0) return;
+
+    // Filled semi-transparent polygon
+    ctx.beginPath();
+    ctx.moveTo(corners[0].px, corners[0].py);
+    corners.forEach(c => ctx.lineTo(c.px, c.py));
+    ctx.closePath();
+    ctx.fillStyle   = 'rgba(34, 197, 94, 0.20)';
+    ctx.fill();
+    ctx.strokeStyle = '#16a34a';
+    ctx.lineWidth   = 2;
+    ctx.stroke();
+
+    // Draw corner points
+    corners.forEach((c, i) => {
+        ctx.beginPath();
+        ctx.arc(c.px, c.py, 6, 0, 2*Math.PI);
+        ctx.fillStyle   = '#f97316';
+        ctx.fill();
+        ctx.strokeStyle = '#fff';
+        ctx.lineWidth   = 1.5;
+        ctx.stroke();
+
+        ctx.fillStyle = '#fff';
+        ctx.font      = 'bold 14px Arial';
+        ctx.fillText(i + 1, c.px + 8, c.py - 6);
+    });
+}
+
+// ── Sidebar UI ─────────────────────────────────────────────────────────────
+function updateUI() {
+    const tbody  = document.getElementById('pt-body');
+    const count  = document.getElementById('pt-count');
+    const status = document.getElementById('status-msg');
+    const btnSv  = document.getElementById('btn-save');
+    const btnCl  = document.getElementById('btn-clear');
+
+    count.textContent = corners.length + ' pts';
+
+    if (corners.length === 0) {
+        tbody.innerHTML = '<tr id="empty-row"><td colspan="4" class="text-center text-muted small py-3">Click corners on the image.</td></tr>';
+        btnSv.disabled  = true;
+        btnCl.disabled  = true;
+        status.className     = 'alert alert-warning small py-2 mb-3';
+        status.textContent   = 'Click at least 3 corners to enable saving.';
+        return;
+    }
+
+    tbody.innerHTML = corners.map((c, i) => `
+        <tr>
+            <td class="fw-bold">${i+1}</td>
+            <td><input type="number" step="0.001" class="form-control form-control-sm"
+                       value="${c.fx}" onchange="updateCorner(${i},'x',this.value)"></td>
+            <td><input type="number" step="0.001" class="form-control form-control-sm"
+                       value="${c.fy}" onchange="updateCorner(${i},'y',this.value)"></td>
+            <td><button class="btn btn-sm btn-outline-danger px-1 py-0"
+                        onclick="removeCorner(${i})">✕</button></td>
+        </tr>`).join('');
+
+    btnCl.disabled = false;
+
+    if (corners.length < 3) {
+        btnSv.disabled       = true;
+        status.className     = 'alert alert-warning small py-2 mb-3';
+        status.textContent   = `${3 - corners.length} more corner(s) needed.`;
+    } else {
+        btnSv.disabled       = false;
+        status.className     = 'alert alert-success small py-2 mb-3';
+        status.textContent   = `✓ ${corners.length} corners — ready to save.`;
+    }
+}
+
+window.updateCorner = (i, axis, val) => {
+    if (axis === 'x') corners[i].fx = parseFloat(val) || 0;
+    if (axis === 'y') corners[i].fy = parseFloat(val) || 0;
+};
+window.removeCorner = (i) => { corners.splice(i, 1); redraw(); updateUI(); };
+
+document.getElementById('btn-clear').addEventListener('click', () => {
+    if (confirm('Clear all corners?')) { corners = []; redraw(); updateUI(); }
+});
+
+// ── Save ───────────────────────────────────────────────────────────────────
+document.getElementById('btn-save').addEventListener('click', () => {
+    if (corners.length < 3) return;
+    const btn = document.getElementById('btn-save');
+    btn.disabled     = true;
+    btn.textContent  = 'Saving…';
+
+    const polygon = corners.map(c => [c.fx, c.fy]);
+
+    fetch(`/camera/${CAM_ID}/coverage`, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ polygon }),
+    })
+    .then(r => r.json())
+    .then(d => {
+        const el = document.getElementById('save-result');
+        el.style.display = 'block';
+        if (d.success) {
+            el.className   = 'alert alert-success mt-3';
+            el.innerHTML   = `✅ <strong>Coverage polygon saved!</strong> ${d.count} corners written to cameras.json.<br>
+                              <small class="text-muted">Next: run <em>Auto-compute from Cameras</em> on the dashboard to update floor dimensions.</small>`;
+        } else {
+            el.className   = 'alert alert-danger mt-3';
+            el.textContent = 'Error: ' + d.error;
+        }
+        btn.disabled    = false;
+        btn.textContent = '💾 Save Coverage Polygon';
+    })
+    .catch(() => {
+        const el = document.getElementById('save-result');
+        el.style.display = 'block';
+        el.className     = 'alert alert-danger mt-3';
+        el.textContent   = 'Network or server error.';
+        btn.disabled    = false;
+        btn.textContent = '💾 Save Coverage Polygon';
+    });
+});
+</script>
+</body>
+</html>
