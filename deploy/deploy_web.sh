@@ -60,9 +60,10 @@ sudo chown ubuntu:ubuntu "$LOG_DIR"
 # Set up .env if not exists
 if [ ! -f "$WORKDIR/web_ui/.env" ]; then
     cp "$WORKDIR/web_ui/.env.template" "$WORKDIR/web_ui/.env"
-    # Generate a random admin password
     RAND_PASS=$(openssl rand -base64 12 | tr -dc 'a-zA-Z0-9' | head -c 16)
-    sed -i "s/strong_password123/$RAND_PASS/" "$WORKDIR/web_ui/.env"
+    RAND_KEY=$(openssl rand -hex 32)
+    sed -i "s/change_me_to_random_string/$RAND_KEY/" "$WORKDIR/web_ui/.env"
+    sed -i "s/change_me/$RAND_PASS/g" "$WORKDIR/web_ui/.env"
     echo ""
     echo "  ⚠️  Generated admin credentials:"
     echo "  Username : admin"

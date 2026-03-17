@@ -42,7 +42,7 @@ DEFAULT_BUCKET = "crowd-management-pipeline-bucket" # Change as needed
 
 # --- App Initialization ---
 app = Flask(__name__)
-app.secret_key = os.urandom(24) # Ensure session security
+app.secret_key = os.environ.get("SECRET_KEY", "crimenabi-dev-key-change-in-prod")
 
 # --- Configuration paths ---
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
