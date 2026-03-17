@@ -23,7 +23,7 @@ import cv2
 from calibration.homography import HomographyMapper
 from calibration.lens_correction import LensCorrector
 from calibration.ocr_timestamp import TimestampExtractor
-from detection.detector import PersonDetector
+from detection.detector import PersonDetector, COCO_CLASS_NAMES
 from fusion.crossing import LineCrossingDetector
 from pipeline.s3_source import S3VideoSource, _is_s3_uri
 
@@ -35,12 +35,16 @@ def _run_camera_in_thread(args: tuple) -> str:
     """Called by ThreadPoolExecutor — one camera per thread."""
     (
         camera_id, config_dir, output_dir,
-        model_name, model_confidence,
+        model_name, model_confidence, model_classes,
         append_output, frame_stride, ocr_interval,
     ) = args
 
     # Per-thread model — own YOLO+ByteTrack state, own CUDA allocation
-    cam_model = PersonDetector(model_name=model_name, confidence=model_confidence)
+    cam_model = PersonDetector(
+        model_name     = model_name,
+        confidence     = model_confidence,
+        target_classes = model_classes,
+    )
 
     processor = PerCameraProcessor(
         camera_id     = camera_id,
@@ -349,8 +353,9 @@ class PerCameraProcessor:
                             for det, (floor_x, floor_y) in zip(detections, floor_coords):
                                 if det.track_id < 0:
                                     continue
-                                class_name = ("person" if det.class_id == 0
-                                              else f"class_{det.class_id}")
+                                class_name = COCO_CLASS_NAMES.get(
+                                    det.class_id, f"class_{det.class_id}"
+                                )
                                 self.crossing_detector.update(
                                     track_id  = det.track_id,
                                     class_name= class_name,
@@ -422,6 +427,7 @@ class MultiCameraRunner:
         output_dir: str,
         model_path: str = "yolov8n.pt",
         append_output: bool = False,
+        target_classes: "str | list[int] | None" = None,
     ) -> None:
         self.config_dir    = Path(config_dir)
         self.output_dir    = Path(output_dir)
@@ -440,7 +446,7 @@ class MultiCameraRunner:
             "MultiCameraRunner: %d cameras, model=%s, append=%s",
             len(self.cameras), model_path, append_output,
         )
-        self.detector = PersonDetector(model_name=model_path)
+        self.detector = PersonDetector(model_name=model_path, target_classes=target_classes)
 
     def run_all(
         self,
@@ -492,6 +498,7 @@ class MultiCameraRunner:
                 str(self.output_dir),
                 self.detector.model_name,
                 self.detector.confidence,
+                self.detector.target_classes,   # pass resolved class IDs
                 self.append_output,
                 frame_stride,
                 ocr_interval,

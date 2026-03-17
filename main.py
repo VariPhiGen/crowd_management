@@ -1259,6 +1259,15 @@ Examples
         help="YOLO model weights file to use (e.g. yolov8n.pt, yolov8m.pt, yolov8s.pt)",
     )
     parser.add_argument(
+        "--classes", type=str, default=None, metavar="CLASSES",
+        help=(
+            "Comma-separated YOLO classes to detect (default: person,car,motorcycle,truck).\n"
+            "Use names:  'person,truck'   or COCO IDs: '0,2,3,7'\n"
+            "Use 'all'   to detect every COCO class.\n"
+            "Use 'person' to detect persons only (original behaviour)."
+        ),
+    )
+    parser.add_argument(
         "--workers", type=int, default=4, metavar="N",
         help=(
             "Number of cameras to process in parallel (default 4).\n"
@@ -1578,7 +1587,7 @@ def main() -> None:
         cam_id = args.process_camera
         print(f"\n[Pipeline] Running offline processing for camera: {cam_id}")
         
-        detector = PersonDetector(model_name=args.model) 
+        detector = PersonDetector(model_name=args.model, target_classes=args.classes)
         try:
             proc = PerCameraProcessor(
                 camera_id=cam_id,
@@ -1665,10 +1674,11 @@ def main() -> None:
         
         # 1. Pipeline Runner
         runner = MultiCameraRunner(
-            config_dir=str(CONFIG_DIR),
-            output_dir=str(OUTPUT_DIR),
-            model_path=args.model,
-            append_output=args.append,
+            config_dir     = str(CONFIG_DIR),
+            output_dir     = str(OUTPUT_DIR),
+            model_path     = args.model,
+            append_output  = args.append,
+            target_classes = args.classes,
         )
         csv_paths = runner.run_all(
             sequential    = False,

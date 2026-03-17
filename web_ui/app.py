@@ -107,16 +107,18 @@ def dashboard():
             python_exec = _sys.executable
 
             if action == 'process':
-                # Read performance settings from form (with safe defaults)
+                # Read performance / detection settings from form
                 workers      = int(request.form.get('workers', 4))
                 frame_stride = int(request.form.get('frame_stride', 2))
                 ocr_interval = int(request.form.get('ocr_interval', 0))
+                classes      = request.form.get('classes', 'person,car,motorcycle,truck').strip()
 
                 cmd = [
                     python_exec, "main.py", "--process",
                     "--workers",      str(workers),
                     "--frame-stride", str(frame_stride),
                     "--ocr-interval", str(ocr_interval),
+                    "--classes",      classes,
                 ]
 
                 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -130,13 +132,12 @@ def dashboard():
                     'log_file':   str(log_file),
                     'start_time': time.time(),
                     'status':     'running',
-                    'name':       f'Main Pipeline (workers={workers}, stride={frame_stride})',
+                    'name':       f'Main Pipeline (workers={workers}, stride={frame_stride}, classes={classes})',
                 }
                 message = (
                     f"Full pipeline started — {workers} cameras in parallel, "
-                    f"frame stride {frame_stride}, OCR every "
-                    f"{'auto (1 s)' if ocr_interval == 0 else str(ocr_interval) + ' frames'}. "
-                    "Check logs below."
+                    f"stride {frame_stride}, OCR {'auto' if ocr_interval == 0 else str(ocr_interval) + 'f'}, "
+                    f"classes: {classes}. Check logs below."
                 )
 
             elif action == 'fuse':

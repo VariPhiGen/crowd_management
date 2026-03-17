@@ -152,26 +152,80 @@ class FloorDetection:
 #  PersonDetector
 # ═══════════════════════════════════════════════════════════════════════════
 
+# COCO class ID → human-readable name for every class we support.
+# Add more entries here if other classes are needed in future.
+COCO_CLASS_NAMES: dict[int, str] = {
+    0:  "person",
+    1:  "bicycle",
+    2:  "car",
+    3:  "motorcycle",
+    5:  "bus",
+    7:  "truck",
+}
+
+# Default classes detected when none are specified
+_DEFAULT_CLASSES: list[int] = [0, 2, 3, 7]   # person, car, motorcycle, truck
+
+
+def parse_classes(spec: "str | list[int] | None") -> list[int]:
+    """
+    Convert a flexible class specification to a sorted list of COCO class IDs.
+
+    Accepted formats
+    ----------------
+    None / ""         → default classes (person, car, motorcycle, truck)
+    "all"             → all COCO classes (no filter)
+    "person,truck"    → names resolved to IDs  [0, 7]
+    "0,2,3,7"         → already numeric strings → [0, 2, 3, 7]
+    [0, 2, 3, 7]      → list of ints passed through unchanged
+
+    Raises ValueError for unknown class names.
+    """
+    if spec is None or spec == "":
+        return list(_DEFAULT_CLASSES)
+
+    if isinstance(spec, list):
+        return sorted(set(int(c) for c in spec))
+
+    if spec.lower() == "all":
+        return []   # empty list = no filter in Ultralytics
+
+    _name_to_id = {v: k for k, v in COCO_CLASS_NAMES.items()}
+    result: list[int] = []
+    for token in spec.replace(" ", "").split(","):
+        if token.isdigit():
+            result.append(int(token))
+        elif token in _name_to_id:
+            result.append(_name_to_id[token])
+        else:
+            raise ValueError(
+                f"Unknown class '{token}'. "
+                f"Known names: {list(_name_to_id.keys())}. "
+                f"Or use a numeric COCO class ID."
+            )
+    return sorted(set(result))
+
+
 class PersonDetector:
     """
-    YOLOv8 person detector.
+    YOLOv8 multi-class detector (person, car, motorcycle, truck by default).
 
-    Downloads ``yolov8n.pt`` (~6 MB) from Ultralytics on first use if not
-    already cached.  All detection is filtered to COCO class 0 (person).
+    Downloads weights from Ultralytics on first use if not cached.
 
     Parameters
     ----------
     model_name : str
-        YOLOv8 variant name or path, e.g. ``"yolov8n.pt"`` (nano, fastest),
-        ``"yolov8s.pt"`` (small), ``"yolov8m.pt"`` (medium).
+        YOLOv8 variant, e.g. ``"yolov8m.pt"`` (default), ``"yolov8n.pt"``.
     confidence : float
-        Minimum confidence threshold in [0, 1].  Default 0.5.
+        Minimum confidence threshold [0, 1].  Default 0.5.
     device : str
-        Torch device: ``"cpu"``, ``"cuda:0"``, ``"mps"``, etc.
+        ``"auto"`` (default) selects CUDA → MPS → CPU automatically.
     track_point : str
-        Which point on the bounding box is projected onto the floor plane.
-        One of ``"bottom"`` (feet, default), ``"center"`` (mid-body), or
-        ``"top"`` (head).
+        Floor-projection anchor: ``"bottom"`` (default), ``"center"``, ``"top"``.
+    target_classes : str | list[int] | None
+        Classes to detect.  Accepts names (``"person,car,truck"``), COCO IDs
+        (``"0,2,7"``), or ``None`` / ``""`` for the default set
+        (person, car, motorcycle, truck).  Pass ``"all"`` to detect everything.
     """
 
     def __init__(
@@ -180,11 +234,13 @@ class PersonDetector:
         confidence: float = 0.50,
         device: str = "auto",
         track_point: str = "bottom",
+        target_classes: "str | list[int] | None" = None,
     ) -> None:
-        self.model_name   = model_name
-        self.confidence   = confidence
-        self.track_point  = track_point   # "bottom" | "center" | "top"
-        self.model        = None
+        self.model_name     = model_name
+        self.confidence     = confidence
+        self.track_point    = track_point   # "bottom" | "center" | "top"
+        self.target_classes = parse_classes(target_classes)
+        self.model          = None
 
         # Auto-select best available device
         if device == "auto":
@@ -203,9 +259,13 @@ class PersonDetector:
         try:
             from ultralytics import YOLO
             self.model = YOLO(model_name)
+            _class_names = (
+                [COCO_CLASS_NAMES.get(c, str(c)) for c in self.target_classes]
+                if self.target_classes else ["all"]
+            )
             logger.info(
-                "PersonDetector: loaded '%s' on device=%s",
-                model_name, device,
+                "PersonDetector: loaded '%s' on device=%s — tracking classes: %s",
+                model_name, device, _class_names,
             )
         except ImportError:
             logger.warning(
@@ -246,10 +306,9 @@ class PersonDetector:
             results = self.model(
                 frame,
                 conf         = self.confidence,
-                iou          = 0.4,    # NMS IoU — lower = stricter dedup of
-                                       # overlapping boxes for the same person
-                agnostic_nms = True,   # class-agnostic NMS (single class anyway)
-                classes      = [0],    # person only
+                iou          = 0.4,
+                agnostic_nms = True,
+                classes      = self.target_classes or None,  # None = all classes
                 device       = self.device,
                 verbose      = False,
             )
@@ -285,10 +344,10 @@ class PersonDetector:
                 conf         = self.confidence,
                 iou          = 0.4,
                 agnostic_nms = True,
-                classes      = [0],
+                classes      = self.target_classes or None,  # None = all classes
                 device       = self.device,
                 verbose      = False,
-                persist      = True,     # maintain tracker state across calls
+                persist      = True,
                 tracker      = "bytetrack.yaml",
             )
         except Exception as exc:
@@ -430,10 +489,11 @@ class CameraProcessor:
         # Each camera gets its own PersonDetector so ByteTrack track IDs
         # stay per-camera and don't bleed across cameras.
         self.detector = PersonDetector(
-            model_name  = detector.model_name,
-            confidence  = detector.confidence,
-            device      = detector.device,
-            track_point = _cfg_tp,
+            model_name     = detector.model_name,
+            confidence     = detector.confidence,
+            device         = detector.device,
+            track_point    = _cfg_tp,
+            target_classes = detector.target_classes,
         )
 
         # Foot estimator — corrects foot positions when crowd occludes bbox bottom
