@@ -1,0 +1,10 @@
+{
+  "floor_width_m": 30.0,
+  "floor_height_m": 86.5,
+  "grid_cell_size_m": 1.0,
+  "major_grid_every_m": 5,
+  "origin": "bottom_left",
+  "unit": "meters",
+  "floor_origin_x_m": -13.5,
+  "floor_origin_y_m": -3.0
+}

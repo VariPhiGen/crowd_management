@@ -1,0 +1,36 @@
+{
+  "overlap_zones": [
+    {
+      "id": "overlap_cam_1_cam_2",
+      "cameras": [
+        "cam_1",
+        "cam_2"
+      ],
+      "floor_polygon": [
+        [
+          4.72,
+          0.53
+        ],
+        [
+          0.2,
+          4.33
+        ],
+        [
+          9.08,
+          35.52
+        ],
+        [
+          9.87,
+          34.47
+        ],
+        [
+          8.19,
+          2.79
+        ]
+      ],
+      "distance_threshold_m": 2.5,
+      "buffer_margin_m": 0.8,
+      "fusion_strategy": "weighted_average"
+    }
+  ]
+}

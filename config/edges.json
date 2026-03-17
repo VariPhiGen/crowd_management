@@ -1,0 +1,246 @@
+{
+  "_comment": [
+    "Auto-generated at startup from floor_config.json.",
+    "Floor: 12.5 m (X) \u00d7 35.5 m (Y),  step: 1.0 m.",
+    "Edit values or add custom edges, then remove the _auto flag to pin this file."
+  ],
+  "_auto": true,
+  "step_m": 1.0,
+  "edges": [
+    {
+      "id": "x_1",
+      "type": "vertical",
+      "value": 1.0
+    },
+    {
+      "id": "x_2",
+      "type": "vertical",
+      "value": 2.0
+    },
+    {
+      "id": "x_3",
+      "type": "vertical",
+      "value": 3.0
+    },
+    {
+      "id": "x_4",
+      "type": "vertical",
+      "value": 4.0
+    },
+    {
+      "id": "x_5",
+      "type": "vertical",
+      "value": 5.0
+    },
+    {
+      "id": "x_6",
+      "type": "vertical",
+      "value": 6.0
+    },
+    {
+      "id": "x_7",
+      "type": "vertical",
+      "value": 7.0
+    },
+    {
+      "id": "x_8",
+      "type": "vertical",
+      "value": 8.0
+    },
+    {
+      "id": "x_9",
+      "type": "vertical",
+      "value": 9.0
+    },
+    {
+      "id": "x_10",
+      "type": "vertical",
+      "value": 10.0
+    },
+    {
+      "id": "x_11",
+      "type": "vertical",
+      "value": 11.0
+    },
+    {
+      "id": "x_12",
+      "type": "vertical",
+      "value": 12.0
+    },
+    {
+      "id": "y_1",
+      "type": "horizontal",
+      "value": 1.0
+    },
+    {
+      "id": "y_2",
+      "type": "horizontal",
+      "value": 2.0
+    },
+    {
+      "id": "y_3",
+      "type": "horizontal",
+      "value": 3.0
+    },
+    {
+      "id": "y_4",
+      "type": "horizontal",
+      "value": 4.0
+    },
+    {
+      "id": "y_5",
+      "type": "horizontal",
+      "value": 5.0
+    },
+    {
+      "id": "y_6",
+      "type": "horizontal",
+      "value": 6.0
+    },
+    {
+      "id": "y_7",
+      "type": "horizontal",
+      "value": 7.0
+    },
+    {
+      "id": "y_8",
+      "type": "horizontal",
+      "value": 8.0
+    },
+    {
+      "id": "y_9",
+      "type": "horizontal",
+      "value": 9.0
+    },
+    {
+      "id": "y_10",
+      "type": "horizontal",
+      "value": 10.0
+    },
+    {
+      "id": "y_11",
+      "type": "horizontal",
+      "value": 11.0
+    },
+    {
+      "id": "y_12",
+      "type": "horizontal",
+      "value": 12.0
+    },
+    {
+      "id": "y_13",
+      "type": "horizontal",
+      "value": 13.0
+    },
+    {
+      "id": "y_14",
+      "type": "horizontal",
+      "value": 14.0
+    },
+    {
+      "id": "y_15",
+      "type": "horizontal",
+      "value": 15.0
+    },
+    {
+      "id": "y_16",
+      "type": "horizontal",
+      "value": 16.0
+    },
+    {
+      "id": "y_17",
+      "type": "horizontal",
+      "value": 17.0
+    },
+    {
+      "id": "y_18",
+      "type": "horizontal",
+      "value": 18.0
+    },
+    {
+      "id": "y_19",
+      "type": "horizontal",
+      "value": 19.0
+    },
+    {
+      "id": "y_20",
+      "type": "horizontal",
+      "value": 20.0
+    },
+    {
+      "id": "y_21",
+      "type": "horizontal",
+      "value": 21.0
+    },
+    {
+      "id": "y_22",
+      "type": "horizontal",
+      "value": 22.0
+    },
+    {
+      "id": "y_23",
+      "type": "horizontal",
+      "value": 23.0
+    },
+    {
+      "id": "y_24",
+      "type": "horizontal",
+      "value": 24.0
+    },
+    {
+      "id": "y_25",
+      "type": "horizontal",
+      "value": 25.0
+    },
+    {
+      "id": "y_26",
+      "type": "horizontal",
+      "value": 26.0
+    },
+    {
+      "id": "y_27",
+      "type": "horizontal",
+      "value": 27.0
+    },
+    {
+      "id": "y_28",
+      "type": "horizontal",
+      "value": 28.0
+    },
+    {
+      "id": "y_29",
+      "type": "horizontal",
+      "value": 29.0
+    },
+    {
+      "id": "y_30",
+      "type": "horizontal",
+      "value": 30.0
+    },
+    {
+      "id": "y_31",
+      "type": "horizontal",
+      "value": 31.0
+    },
+    {
+      "id": "y_32",
+      "type": "horizontal",
+      "value": 32.0
+    },
+    {
+      "id": "y_33",
+      "type": "horizontal",
+      "value": 33.0
+    },
+    {
+      "id": "y_34",
+      "type": "horizontal",
+      "value": 34.0
+    },
+    {
+      "id": "y_35",
+      "type": "horizontal",
+      "value": 35.0
+    }
+  ]
+}

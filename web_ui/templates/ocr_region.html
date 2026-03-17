@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Set OCR Region - {{ camera.name }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/static/css/style.css" rel="stylesheet">
+    <style>
+        #canvas-container {
+            position: relative;
+            display: inline-block;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            background-color: #000;
+        }
+        canvas {
+            display: block;
+            cursor: crosshair;
+        }
+        .instruction-box {
+            background-color: #e9ecef;
+            border-left: 4px solid #0d6efd;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+    </style>
+</head>
+<body class="bg-light">
+
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
+    <div class="container">
+        <a class="navbar-brand" href="/">Sober Crowd Engine</a>
+        <div class="d-flex">
+            <a href="/camera/{{ camera.id }}" class="btn btn-outline-light me-2 badge">Back to Camera</a>
+            <a href="/logout" class="btn btn-danger badge">Logout</a>
+        </div>
+    </div>
+</nav>
+
+<div class="container mb-5">
+    <h3 class="mb-4">Select Timestamp Region (OCR) <span class="badge bg-secondary">{{ camera.id }}</span></h3>
+    
+    <div class="instruction-box">
+        <strong>Instructions:</strong> Wait for the video frame to load below from S3/local storage. Click and drag a box tightly around the camera's timestamp overlay. This configures where the AI looks to extract the time for multi-camera synchronization.
+    </div>
+
+    <div class="row">
+        <div class="col-md-9 text-center">
+            <h5 id="loading-msg" class="text-muted my-5">Loading frame from source... Please wait.</h5>
+            <div id="canvas-container" style="display: none;">
+                <canvas id="imgCanvas"></canvas>
+            </div>
+        </div>
+        
+        <div class="col-md-3">
+            <div class="card shadow-sm mt-3 mt-md-0">
+                <div class="card-header bg-white"><h6 class="mb-0">Selected Region</h6></div>
+                <div class="card-body">
+                    <p class="small text-muted mb-2">Display: normalized [0–1]. Saving from here stores <code>x, y, w, h</code> (normalized) in config.</p>
+                    <div class="mb-2"><strong>X Min:</strong> <span id="val-xmin">-</span></div>
+                    <div class="mb-2"><strong>Y Min:</strong> <span id="val-ymin">-</span></div>
+                    <div class="mb-2"><strong>X Max:</strong> <span id="val-xmax">-</span></div>
+                    <div class="mb-3"><strong>Y Max:</strong> <span id="val-ymax">-</span></div>
+                    
+                    <button id="btn-clear" class="btn btn-outline-secondary w-100 mb-2" disabled>Clear Selection</button>
+                    <button id="btn-save" class="btn btn-primary w-100" disabled>Save to Configuration</button>
+                    
+                    <div id="save-alert" class="alert mt-3" style="display:none; padding:0.5rem;" role="alert"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('imgCanvas');
+    const ctx = canvas.getContext('2d');
+    const container = document.getElementById('canvas-container');
+    const loadingMsg = document.getElementById('loading-msg');
+    
+    const valXmin = document.getElementById('val-xmin');
+    const valYmin = document.getElementById('val-ymin');
+    const valXmax = document.getElementById('val-xmax');
+    const valYmax = document.getElementById('val-ymax');
+    
+    const btnClear = document.getElementById('btn-clear');
+    const btnSave = document.getElementById('btn-save');
+    const saveAlert = document.getElementById('save-alert');
+
+    let img = new Image();
+    let isDrawing = false;
+    let startX, startY, currentX, currentY;
+    let finalRegion = null; // [xmin, ymin, xmax, ymax]
+    let existingRegion = null;
+    
+    // Parse existing region if it exists
+    {% if camera.ocr_region %}
+    existingRegion = {{ camera.ocr_region | tojson }};
+    {% endif %}
+
+    // Load image from the extraction API
+    img.src = '/api/camera/{{ camera.id }}/frame';
+    
+    img.onload = () => {
+        loadingMsg.style.display = 'none';
+        container.style.display = 'inline-block';
+        
+        // Size canvas to image
+        canvas.width = img.width;
+        canvas.height = img.height;
+        
+        // Scale canvas CSS if it exceeds container width to stay responsive
+        const maxWidth = container.parentElement.clientWidth;
+        if (img.width > maxWidth) {
+            canvas.style.width = '100%';
+            canvas.style.height = 'auto';
+        }
+
+        redrawCanvas();
+        
+        if (existingRegion) {
+            if (Array.isArray(existingRegion) && existingRegion.length === 4) {
+                // Legacy list: [xmin, ymin, xmax, ymax] or [x, y, w, h] from old saves
+                const a = existingRegion;
+                if (a.every(v => v >= 0 && v <= 1) && (a[2] >= a[0]) && (a[3] >= a[1])) {
+                    finalRegion = a; // treat as [xmin, ymin, xmax, ymax]
+                } else {
+                    finalRegion = [a[0], a[1], a[0] + a[2], a[1] + a[3]]; // [x, y, w, h] -> corners
+                }
+            } else if (existingRegion.coordinate_format === 'normalized' && existingRegion.x !== undefined && existingRegion.w !== undefined) {
+                // Stored as {x, y, w, h, coordinate_format: "normalized"} (from dashboard save)
+                finalRegion = [
+                    existingRegion.x,
+                    existingRegion.y,
+                    existingRegion.x + existingRegion.w,
+                    existingRegion.y + existingRegion.h
+                ];
+            } else if (existingRegion.x !== undefined && existingRegion.w !== undefined) {
+                // Legacy pixel format: {x, y, w, h}
+                finalRegion = [
+                    existingRegion.x / canvas.width,
+                    existingRegion.y / canvas.height,
+                    (existingRegion.x + existingRegion.w) / canvas.width,
+                    (existingRegion.y + existingRegion.h) / canvas.height
+                ];
+            }
+            if (finalRegion) {
+                updateUI();
+                redrawCanvas();
+            }
+        }
+    };
+    
+    img.onerror = () => {
+        loadingMsg.innerHTML = '<span class="text-danger">Failed to load video frame. Verify the S3 URI and files.</span>';
+    };
+
+    function getMousePos(evt) {
+        const rect = canvas.getBoundingClientRect();
+        // Calculate scale factors if CSS scaled it
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        
+        return {
+            x: (evt.clientX - rect.left) * scaleX,
+            y: (evt.clientY - rect.top) * scaleY
+        };
+    }
+
+    canvas.addEventListener('mousedown', (e) => {
+        const pos = getMousePos(e);
+        startX = pos.x;
+        startY = pos.y;
+        isDrawing = true;
+        finalRegion = null;
+        updateUI();
+    });
+
+    canvas.addEventListener('mousemove', (e) => {
+        if (!isDrawing) return;
+        const pos = getMousePos(e);
+        currentX = pos.x;
+        currentY = pos.y;
+        redrawCanvas();
+        
+        // Draw the temporary rect
+        ctx.strokeStyle = '#0d6efd';
+        ctx.lineWidth = 2;
+        ctx.strokeRect(startX, startY, currentX - startX, currentY - startY);
+        // Semi-transparent fill
+        ctx.fillStyle = 'rgba(13, 110, 253, 0.2)';
+        ctx.fillRect(startX, startY, currentX - startX, currentY - startY);
+    });
+
+    canvas.addEventListener('mouseup', (e) => {
+        if (!isDrawing) return;
+        isDrawing = false;
+        
+        const pos = getMousePos(e);
+        currentX = pos.x;
+        currentY = pos.y;
+        
+        // Require a minimum drag distance to prevent click misfires
+        if (Math.abs(currentX - startX) > 10 && Math.abs(currentY - startY) > 10) {
+            // Calculate normalized coords [0..1]
+            const xmin = Math.min(startX, currentX) / canvas.width;
+            const ymin = Math.min(startY, currentY) / canvas.height;
+            const xmax = Math.max(startX, currentX) / canvas.width;
+            const ymax = Math.max(startY, currentY) / canvas.height;
+            
+            finalRegion = [xmin, ymin, xmax, ymax];
+            updateUI();
+        } else {
+            redrawCanvas(); // reset if too small
+        }
+    });
+
+    function redrawCanvas() {
+        ctx.drawImage(img, 0, 0);
+        
+        if (finalRegion) {
+            const rx = finalRegion[0] * canvas.width;
+            const ry = finalRegion[1] * canvas.height;
+            const rw = (finalRegion[2] - finalRegion[0]) * canvas.width;
+            const rh = (finalRegion[3] - finalRegion[1]) * canvas.height;
+            
+            ctx.strokeStyle = '#198754'; // Success green
+            ctx.lineWidth = 3;
+            ctx.strokeRect(rx, ry, rw, rh);
+            ctx.fillStyle = 'rgba(25, 135, 84, 0.2)';
+            ctx.fillRect(rx, ry, rw, rh);
+        }
+    }
+
+    function updateUI() {
+        if (finalRegion) {
+            valXmin.textContent = finalRegion[0].toFixed(4);
+            valYmin.textContent = finalRegion[1].toFixed(4);
+            valXmax.textContent = finalRegion[2].toFixed(4);
+            valYmax.textContent = finalRegion[3].toFixed(4);
+            btnSave.disabled = false;
+            btnClear.disabled = false;
+        } else {
+            valXmin.textContent = '-';
+            valYmin.textContent = '-';
+            valXmax.textContent = '-';
+            valYmax.textContent = '-';
+            btnSave.disabled = true;
+            btnClear.disabled = true;
+        }
+    }
+
+    btnClear.addEventListener('click', () => {
+        finalRegion = null;
+        redrawCanvas();
+        updateUI();
+        saveAlert.style.display = 'none';
+    });
+
+    btnSave.addEventListener('click', () => {
+        if (!finalRegion) return;
+        
+        btnSave.disabled = true;
+        btnSave.textContent = 'Saving...';
+        
+        fetch('/camera/{{ camera.id }}/ocr_region', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ ocr_region: finalRegion })
+        })
+        .then(response => response.json())
+        .then(data => {
+            saveAlert.style.display = 'block';
+            if (data.success) {
+                saveAlert.className = 'alert mt-3 alert-success';
+                saveAlert.textContent = 'Region saved successfully!';
+                
+                // Optional: Update the base "existingRegion" so clear defaults back here or something,
+                // but just showing success is fine.
+            } else {
+                saveAlert.className = 'alert mt-3 alert-danger';
+                saveAlert.textContent = 'Error: ' + data.error;
+            }
+            btnSave.textContent = 'Save to Configuration';
+            btnSave.disabled = false;
+        })
+        .catch((error) => {
+            saveAlert.style.display = 'block';
+            saveAlert.className = 'alert mt-3 alert-danger';
+            saveAlert.textContent = 'Network or server error.';
+            btnSave.textContent = 'Save to Configuration';
+            btnSave.disabled = false;
+        });
+    });
+</script>
+</body>
+</html>

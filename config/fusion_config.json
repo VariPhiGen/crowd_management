@@ -1,0 +1,19 @@
+{
+    "timestamp_tolerance_s": 2,
+    "default_distance_threshold_m": 2,
+    "output_dir": "output/",
+    "csv_format": {
+        "columns": [
+            "timestamp",
+            "track_id",
+            "class_name",
+            "edge_id",
+            "direction",
+            "crossing_x",
+            "crossing_y",
+            "camera_id"
+        ],
+        "timestamp_format": "%Y-%m-%d %H:%M:%S",
+        "float_precision": 2
+    }
+}

@@ -1,0 +1,355 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Calibrate Homography - {{ camera.name }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/static/css/style.css" rel="stylesheet">
+    <style>
+        #canvas-container {
+            position: relative;
+            display: inline-block;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            background-color: #000;
+        }
+        canvas {
+            display: block;
+            cursor: crosshair;
+        }
+        .instruction-box {
+            background-color: #e9ecef;
+            border-left: 4px solid #0dcaf0;
+            padding: 1rem;
+            margin-bottom: 1rem;
+        }
+    </style>
+</head>
+<body class="bg-light">
+
+<nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
+    <div class="container">
+        <a class="navbar-brand" href="/">Sober Crowd Engine</a>
+        <div class="d-flex">
+            <a href="/camera/{{ camera.id }}" class="btn btn-outline-light me-2 badge">Back to Camera</a>
+            <a href="/logout" class="btn btn-danger badge">Logout</a>
+        </div>
+    </div>
+</nav>
+
+<div class="container mb-5">
+    <h3 class="mb-4">Homography Calibration (Floor Mapping) <span class="badge bg-secondary">{{ camera.id }}</span></h3>
+    
+    <div class="instruction-box">
+        <strong>Instructions:</strong> Wait for the video frame to load below from S3/local storage. Click at least <strong>4 points</strong> on the image that correspond to known points on the floor (corners, markers, etc). For each point you click, enter its real-world distance in meters (X, Y) in the table on the right.
+    </div>
+
+    <div class="row">
+        <div class="col-md-8 text-center" style="overflow-x: auto;">
+            <h5 id="loading-msg" class="text-muted my-5">Loading frame from source... Please wait.</h5>
+            <div id="canvas-container" style="display: none;">
+                <canvas id="imgCanvas"></canvas>
+            </div>
+        </div>
+        
+        <div class="col-md-4">
+            <div class="card shadow-sm mt-3 mt-md-0">
+                <div class="card-header bg-white"><h6 class="mb-0">Calibration Points Map</h6></div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-sm" id="pointsTable">
+                            <thead>
+                                <tr>
+                                    <th>#</th>
+                                    <th>Real Y (m)</th>
+                                    <th>Real X (m)</th>
+                                    <th>Delete</th>
+                                </tr>
+                            </thead>
+                            <tbody id="pointsList">
+                                <tr><td colspan="4" class="text-center text-muted small py-3" id="empty-msg">No points clicked yet.</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                    
+                    <div class="alert alert-warning small py-1 px-2 mb-3" id="req-msg">
+                        <small>Need at least <span id="pts-needed">4</span> more points.</small>
+                    </div>
+
+                    <button id="btn-clear" class="btn btn-outline-secondary w-100 mb-2" disabled>Clear All</button>
+                    <button id="btn-save" class="btn btn-info w-100" disabled>Save & Compute Calibration</button>
+                    
+                    <div id="save-alert" class="alert mt-3" style="display:none; padding:0.5rem;" role="alert"></div>
+
+                    <!-- Calibration metrics panel (shown after save) -->
+                    <div id="calibration-metrics" style="display:none;" class="mt-3">
+                        <h6 class="small fw-bold border-bottom pb-1 mb-2">📐 Calibration Results</h6>
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="small text-muted">RMSE</span>
+                            <span id="met-rmse" class="fw-bold"></span>
+                        </div>
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <span class="small text-muted">Quality</span>
+                            <span id="met-quality" class="badge"></span>
+                        </div>
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <span class="small text-muted">Inliers (RANSAC)</span>
+                            <span id="met-inliers" class="small fw-semibold"></span>
+                        </div>
+                        <table class="table table-sm table-bordered mb-0" style="font-size:0.75rem;">
+                            <thead class="table-light">
+                                <tr><th>#</th><th>Error (m)</th><th>Error (cm)</th></tr>
+                            </thead>
+                            <tbody id="met-per-point">
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('imgCanvas');
+    const ctx = canvas.getContext('2d');
+    const container = document.getElementById('canvas-container');
+    const loadingMsg = document.getElementById('loading-msg');
+    
+    const pointsList = document.getElementById('pointsList');
+    const emptyMsg = document.getElementById('empty-msg');
+    const ptsNeeded = document.getElementById('pts-needed');
+    const reqMsg = document.getElementById('req-msg');
+    
+    const btnClear = document.getElementById('btn-clear');
+    const btnSave = document.getElementById('btn-save');
+    const saveAlert = document.getElementById('save-alert');
+
+    let img = new Image();
+    
+    // Arrays for calibration
+    // image_points: Array of {x: pixel_X, y: pixel_Y, normalizedX: 0..1, normalizedY: 0..1}
+    let image_points = []; 
+
+    // Note: The UI displays X and Y inputs as Real X and Real Y.
+    // However, calibration/calibrate.py states: "Check that your floor_points are correct (X=right, Y=up, metres)."
+
+    // If pre-existing points exist we can load them
+    {% if camera.calibration_points and camera.calibration_points.image_points %}
+        const existingImg = {{ camera.calibration_points.image_points | tojson }};
+        const existingFlr = {{ camera.calibration_points.floor_points | tojson }};
+        
+        for(let i=0; i<existingImg.length; i++) {
+            image_points.push({
+                x: existingImg[i][0],
+                y: existingImg[i][1],
+                floorX: existingFlr[i][0],
+                floorY: existingFlr[i][1]
+            });
+        }
+    {% endif %}
+
+    img.src = '/api/camera/{{ camera.id }}/frame';
+    
+    img.onload = () => {
+        loadingMsg.style.display = 'none';
+        container.style.display = 'inline-block';
+        
+        canvas.width = img.width;
+        canvas.height = img.height;
+        
+        const maxWidth = container.parentElement.clientWidth;
+        if (img.width > maxWidth) {
+            canvas.style.width = '100%';
+            canvas.style.height = 'auto';
+        }
+
+        // Already in pixel coords
+        redrawCanvas();
+        updateUI();
+    };
+    
+    img.onerror = () => {
+        loadingMsg.innerHTML = '<span class="text-danger">Failed to load video frame. Verify S3 URI.</span>';
+    };
+
+    function getMousePos(evt) {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        return {
+            x: (evt.clientX - rect.left) * scaleX,
+            y: (evt.clientY - rect.top) * scaleY
+        };
+    }
+
+    canvas.addEventListener('click', (e) => {
+        const pos = getMousePos(e);
+        image_points.push({
+            x: Math.round(pos.x),
+            y: Math.round(pos.y),
+            floorX: 0.0,
+            floorY: 0.0
+        });
+        redrawCanvas();
+        updateUI();
+    });
+
+    function redrawCanvas() {
+        ctx.drawImage(img, 0, 0);
+        
+        for (let i = 0; i < image_points.length; i++) {
+            const pt = image_points[i];
+            
+            // Draw crosshair
+            ctx.strokeStyle = '#0dcaf0';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(pt.x - 10, pt.y);
+            ctx.lineTo(pt.x + 10, pt.y);
+            ctx.moveTo(pt.x, pt.y - 10);
+            ctx.lineTo(pt.x, pt.y + 10);
+            ctx.stroke();
+
+            // Draw circle
+            ctx.beginPath();
+            ctx.arc(pt.x, pt.y, 4, 0, 2 * Math.PI, false);
+            ctx.fillStyle = 'red';
+            ctx.fill();
+            ctx.lineWidth = 1;
+            ctx.strokeStyle = 'white';
+            ctx.stroke();
+            
+            // Draw Index
+            ctx.fillStyle = 'white';
+            ctx.font = '16px Arial';
+            ctx.fillText(i + 1, pt.x + 8, pt.y - 8);
+        }
+    }
+
+    function updateUI() {
+        if (image_points.length > 0) {
+            pointsList.innerHTML = '';
+            for (let i = 0; i < image_points.length; i++) {
+                const pt = image_points[i];
+                const tr = document.createElement('tr');
+                
+                tr.innerHTML = `
+                    <td class="align-middle fw-bold">${i + 1}</td>
+                    <td><input type="number" step="0.01" class="form-control form-control-sm" value="${pt.floorY}" onchange="updateFloor(${i}, 'Y', this.value)"></td>
+                    <td><input type="number" step="0.01" class="form-control form-control-sm" value="${pt.floorX}" onchange="updateFloor(${i}, 'X', this.value)"></td>
+                    <td><button class="btn btn-sm btn-outline-danger" onclick="deletePoint(${i})">X</button></td>
+                `;
+                pointsList.appendChild(tr);
+            }
+            btnClear.disabled = false;
+        } else {
+            pointsList.innerHTML = '<tr><td colspan="4" class="text-center text-muted small py-3" id="empty-msg">No points clicked yet.</td></tr>';
+            btnClear.disabled = true;
+        }
+
+        const remain = 4 - image_points.length;
+        if (remain > 0) {
+            reqMsg.style.display = 'block';
+            reqMsg.className = 'alert alert-warning small py-1 px-2 mb-3';
+            ptsNeeded.innerText = remain;
+            btnSave.disabled = true;
+        } else {
+            reqMsg.style.display = 'block';
+            reqMsg.className = 'alert alert-success small py-1 px-2 mb-3';
+            reqMsg.innerHTML = '<small>Ready to calibrate (' + image_points.length + ' points)</small>';
+            btnSave.disabled = false;
+        }
+    }
+
+    window.updateFloor = function(idx, axis, val) {
+        if (axis === 'X') image_points[idx].floorX = parseFloat(val) || 0;
+        if (axis === 'Y') image_points[idx].floorY = parseFloat(val) || 0;
+    };
+
+    window.deletePoint = function(idx) {
+        image_points.splice(idx, 1);
+        redrawCanvas();
+        updateUI();
+    };
+
+    btnClear.addEventListener('click', () => {
+        if(confirm("Clear all calibration points?")) {
+            image_points = [];
+            redrawCanvas();
+            updateUI();
+            saveAlert.style.display = 'none';
+        }
+    });
+
+    btnSave.addEventListener('click', () => {
+        if (image_points.length < 4) return;
+        
+        btnSave.disabled = true;
+        btnSave.textContent = 'Saving...';
+        
+        // Prepare arrays (backend wants absolute pixel coords for Homography)
+        const imgPts = image_points.map(p => [Number(p.x), Number(p.y)]);
+        const flrPts = image_points.map(p => [Number(p.floorX), Number(p.floorY)]);
+        
+        const payload = {
+            image_points: imgPts,
+            floor_points: flrPts,
+            frame_size: [canvas.width, canvas.height]
+        };
+
+        fetch('/camera/{{ camera.id }}/calibrate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        })
+        .then(response => response.json())
+        .then(data => {
+            saveAlert.style.display = 'block';
+            if (data.success) {
+                saveAlert.className = 'alert mt-3 alert-success';
+                saveAlert.innerHTML = '✅ <strong>Calibration computed and saved!</strong> Homography matrix updated in cameras.json.';
+
+                // Populate metrics panel
+                const m = data.metrics;
+                const metricsDiv = document.getElementById('calibration-metrics');
+                metricsDiv.style.display = 'block';
+
+                document.getElementById('met-rmse').textContent = `${m.rmse_m} m  (${m.rmse_cm} cm)`;
+
+                const qualityEl = document.getElementById('met-quality');
+                qualityEl.textContent = m.quality;
+                qualityEl.className = `badge bg-${m.quality_color}`;
+
+                document.getElementById('met-inliers').textContent = `${m.inliers} / ${m.total_points}`;
+
+                const tbody = document.getElementById('met-per-point');
+                tbody.innerHTML = '';
+                m.per_point_errors_m.forEach((err, idx) => {
+                    const cm = (err * 100).toFixed(2);
+                    const rowColor = err < 0.05 ? '#d4edda' : (err < 0.2 ? '#fff3cd' : '#f8d7da');
+                    tbody.innerHTML += `<tr style="background:${rowColor}">
+                        <td>${idx + 1}</td>
+                        <td>${err}</td>
+                        <td>${cm}</td>
+                    </tr>`;
+                });
+            } else {
+                saveAlert.className = 'alert mt-3 alert-danger';
+                saveAlert.textContent = 'Error: ' + data.error;
+                document.getElementById('calibration-metrics').style.display = 'none';
+            }
+            btnSave.textContent = 'Save & Compute Calibration';
+            btnSave.disabled = false;
+        })
+        .catch((error) => {
+            saveAlert.style.display = 'block';
+            saveAlert.className = 'alert mt-3 alert-danger';
+            saveAlert.textContent = 'Network or server error.';
+            btnSave.textContent = 'Save Calibration';
+            btnSave.disabled = false;
+        });
+    });
+</script>
+</body>
+</html>
