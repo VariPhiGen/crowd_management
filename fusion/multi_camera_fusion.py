@@ -211,9 +211,23 @@ class CrossingFuser:
         if not path_a.exists() or not path_b.exists():
             return {}
 
+        def _load_tracks(path: Path) -> pd.DataFrame:
+            df = pd.read_csv(path)
+            df["timestamp"] = pd.to_datetime(df["timestamp"], format="mixed", errors="coerce")
+            df["floor_x"] = pd.to_numeric(df["floor_x"], errors="coerce")
+            df["floor_y"] = pd.to_numeric(df["floor_y"], errors="coerce")
+            df["track_id"] = pd.to_numeric(df["track_id"], errors="coerce")
+            before = len(df)
+            df = df.dropna(subset=["timestamp", "floor_x", "floor_y", "track_id"])
+            df["track_id"] = df["track_id"].astype(int)
+            dropped = before - len(df)
+            if dropped:
+                logger.warning("Tracks CSV %s: dropped %d/%d malformed rows", path.name, dropped, before)
+            return df
+
         try:
-            tracks_a = pd.read_csv(path_a, parse_dates=["timestamp"])
-            tracks_b = pd.read_csv(path_b, parse_dates=["timestamp"])
+            tracks_a = _load_tracks(path_a)
+            tracks_b = _load_tracks(path_b)
         except Exception as exc:
             logger.warning("Could not load tracks CSVs for %s/%s: %s", cam_a, cam_b, exc)
             return {}
@@ -221,7 +235,7 @@ class CrossingFuser:
         # Filter to overlap zone
         def in_zone(df: pd.DataFrame) -> pd.DataFrame:
             mask = [
-                poly.contains(Point(x, y))
+                poly.contains(Point(float(x), float(y)))
                 for x, y in zip(df["floor_x"], df["floor_y"])
             ]
             return df[mask]
