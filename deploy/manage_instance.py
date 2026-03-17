@@ -62,7 +62,13 @@ GITHUB_REPO    = "https://github.com/VariPhiGen/crowd_management.git"
 SSH_USER       = "ubuntu"
 WORKDIR        = "/home/ubuntu/crowd_management"
 VENV           = "/opt/crimenabi_venv"
-SUBNET_ID      = "subnet-0402a3003ec0073f2"
+# Try all AZs in order until one has capacity
+SUBNETS = [
+    ("subnet-0402a3003ec0073f2", "ap-northeast-1a"),
+    ("subnet-08451d20d1f76dd4a", "ap-northeast-1c"),
+    ("subnet-0c2230dc6db0d50e8", "ap-northeast-1d"),
+]
+SUBNET_ID      = SUBNETS[0][0]   # default for first launch
 
 # Instance ID is persisted here so start/stop work without re-specifying
 INSTANCE_ID_FILE = Path(__file__).parent / ".instance_id"
@@ -171,35 +177,50 @@ def cmd_launch():
     print("  Launching g5.2xlarge (first-time setup ~15 min)")
     print("=" * 60)
 
-    resp = ec2.run_instances(
-        ImageId      = AMI_ID,
-        InstanceType = INSTANCE_TYPE,
-        MinCount     = 1,
-        MaxCount     = 1,
-        KeyName      = KEY_NAME,
-        NetworkInterfaces=[{
-            "AssociatePublicIpAddress": True,
-            "DeviceIndex": 0,
-            "SubnetId": SUBNET_ID,
-            "Groups": [SECURITY_GROUP],
-        }],
-        IamInstanceProfile = {"Name": IAM_PROFILE},
-        BlockDeviceMappings = [{
-            "DeviceName": "/dev/sda1",
-            "Ebs": {
-                "VolumeSize":          500,
-                "VolumeType":          "gp3",
-                "Iops":                3000,
-                "Throughput":          125,
-                "DeleteOnTermination": True,
-            },
-        }],
-        TagSpecifications = [
-            {"ResourceType": "instance", "Tags": REQUIRED_TAGS},
-            {"ResourceType": "volume",   "Tags": REQUIRED_TAGS},
-        ],
-        UserData = encoded_ud,
-    )
+    # Try each AZ until one has capacity
+    resp = None
+    for subnet, az in SUBNETS:
+        try:
+            print(f"  Trying {az} ({subnet})...")
+            resp = ec2.run_instances(
+                ImageId      = AMI_ID,
+                InstanceType = INSTANCE_TYPE,
+                MinCount     = 1,
+                MaxCount     = 1,
+                KeyName      = KEY_NAME,
+                NetworkInterfaces=[{
+                    "AssociatePublicIpAddress": True,
+                    "DeviceIndex": 0,
+                    "SubnetId": subnet,
+                    "Groups": [SECURITY_GROUP],
+                }],
+                IamInstanceProfile = {"Name": IAM_PROFILE},
+                BlockDeviceMappings = [{
+                    "DeviceName": "/dev/sda1",
+                    "Ebs": {
+                        "VolumeSize":          500,
+                        "VolumeType":          "gp3",
+                        "Iops":                3000,
+                        "Throughput":          125,
+                        "DeleteOnTermination": True,
+                    },
+                }],
+                TagSpecifications = [
+                    {"ResourceType": "instance", "Tags": REQUIRED_TAGS},
+                    {"ResourceType": "volume",   "Tags": REQUIRED_TAGS},
+                ],
+                UserData = encoded_ud,
+            )
+            print(f"  ✅  Capacity available in {az}")
+            break
+        except ClientError as e:
+            if "InsufficientInstanceCapacity" in str(e):
+                print(f"  ⚠️  No capacity in {az}, trying next AZ...")
+                continue
+            raise
+
+    if resp is None:
+        sys.exit("  ❌  No g5.2xlarge capacity in any AZ. Try again later.")
 
     iid = resp["Instances"][0]["InstanceId"]
     _save_instance_id(iid)
@@ -232,7 +253,18 @@ def cmd_start():
         sys.exit(f"  ❌  Cannot start instance in state: {state}")
 
     print(f"  Starting instance {iid}...")
-    ec2.start_instances(InstanceIds=[iid])
+    try:
+        ec2.start_instances(InstanceIds=[iid])
+    except ClientError as e:
+        if "InsufficientInstanceCapacity" in str(e):
+            print(f"\n  ❌  No g5.2xlarge capacity available in the current AZ right now.")
+            print(f"  Options:")
+            print(f"    1. Wait 10–30 min and retry:  python3 deploy/manage_instance.py start")
+            print(f"    2. Terminate and relaunch in a different AZ:")
+            print(f"       python3 deploy/manage_instance.py terminate")
+            print(f"       python3 deploy/manage_instance.py launch")
+            sys.exit(1)
+        raise
     info = _wait_for_state(ec2, iid, "running")
     ip   = info.get("PublicIpAddress", "—")
     print(f"  Public IP : {ip}")
