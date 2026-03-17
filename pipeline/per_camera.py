@@ -271,6 +271,13 @@ class PerCameraProcessor:
             _video_iter = iter(self.video_paths)
 
         for vpath in _video_iter:
+            # S3 download failures surface as the value of the future —
+            # the prefetch thread raises RuntimeError; catch it here so
+            # one bad file doesn't abort ALL remaining files for this camera.
+            if isinstance(vpath, Exception):
+                logger.error("[%s] Skipping file — download error: %s", self.camera_id, vpath)
+                continue
+
             logger.info("[%s] Processing file: %s", self.camera_id, vpath.name)
             logger.info(
                 "[%s] Opening video (first frame + YOLO warm-up may take 30–60 s)…",
@@ -323,13 +330,6 @@ class PerCameraProcessor:
                     # timestamp rather than a hardcoded fallback date.
                     _run_ocr = (_frames_in_file == 1) or (frame_idx % _ocr_interval == 1)
 
-                    def _extrapolate_ts() -> Optional[datetime]:
-                        """Extrapolate from last known OCR hit; None if never succeeded."""
-                        if _last_ocr_ts is None:
-                            return None
-                        delta = (frame_idx - _last_ocr_frame_idx) / max(1.0, self._fps)
-                        return _last_ocr_ts + timedelta(seconds=delta)
-
                     if _run_ocr:
                         ts_dt = self.timestamp_extractor.extract(frame)
                         ocr_call_count += 1
@@ -338,9 +338,17 @@ class PerCameraProcessor:
                             _last_ocr_frame_idx = frame_idx
                         else:
                             ocr_failure_count += 1
-                            ts_dt = _extrapolate_ts()
+                            ts_dt = (
+                                _last_ocr_ts + timedelta(
+                                    seconds=(frame_idx - _last_ocr_frame_idx) / max(1.0, self._fps)
+                                ) if _last_ocr_ts is not None else None
+                            )
                     else:
-                        ts_dt = _extrapolate_ts()
+                        ts_dt = (
+                            _last_ocr_ts + timedelta(
+                                seconds=(frame_idx - _last_ocr_frame_idx) / max(1.0, self._fps)
+                            ) if _last_ocr_ts is not None else None
+                        )
 
                     # Absolute last-resort fallback (only if OCR has NEVER succeeded)
                     if ts_dt is None:
@@ -388,6 +396,12 @@ class PerCameraProcessor:
                                     self.camera_id,
                                 ])
 
+                    # Periodic flush — ensures data reaches disk even if the
+                    # process is killed before normal close() is called.
+                    if processed_count % 1000 == 0:
+                        _tracks_file.flush()
+                        self.crossing_detector._csv_file.flush()
+
                     # Progress reporting
                     if self._total_frames == 0 and frame_idx % 500 == 0:
                         elapsed = time.time() - _t_start
@@ -401,6 +415,9 @@ class PerCameraProcessor:
 
             finally:
                 self.cap.release()
+                # Clear stale track positions so ByteTrack's recycled IDs in
+                # the NEXT video don't trigger false crossings on their first frame.
+                self.crossing_detector.reset()
                 if is_s3:
                     self._s3_source.delete_local(vpath)
 
@@ -510,6 +527,51 @@ class MultiCameraRunner:
         output_paths: List[str] = []
 
         _workers = 1 if sequential else min(max_workers, len(self.cameras))
+
+        # ── GPU VRAM pre-flight check ─────────────────────────────────────
+        # YOLOv8m ≈ 1.5 GB + EasyOCR ≈ 0.4 GB + ByteTrack overhead ≈ 0.1 GB
+        # per camera thread. Warn early rather than OOM mid-run.
+        try:
+            import torch
+            if torch.cuda.is_available():
+                free_vram_gb = (torch.cuda.get_device_properties(0).total_memory
+                                - torch.cuda.memory_reserved(0)) / 1e9
+                per_worker_gb = 2.1          # conservative estimate
+                needed_gb     = per_worker_gb * _workers
+                if needed_gb > free_vram_gb * 0.9:
+                    logger.warning(
+                        "GPU VRAM warning: %d workers × %.1f GB ≈ %.1f GB needed, "
+                        "but only %.1f GB free on GPU. Consider reducing --workers "
+                        "to %d to stay under 90%% VRAM.",
+                        _workers, per_worker_gb, needed_gb, free_vram_gb,
+                        max(1, int(free_vram_gb * 0.9 / per_worker_gb)),
+                    )
+                else:
+                    logger.info(
+                        "GPU VRAM: %.1f GB free — %d workers × %.1f GB = %.1f GB needed. OK.",
+                        free_vram_gb, _workers, per_worker_gb, needed_gb,
+                    )
+        except Exception:
+            pass  # non-critical check
+
+        # ── Disk space pre-flight check ───────────────────────────────────
+        try:
+            import shutil as _shutil
+            _, _, free_bytes = _shutil.disk_usage(str(self.output_dir))
+            free_gb = free_bytes / 1e9
+            # Rough estimate: tracks CSV ~50 bytes/row × 7.5 fps × 20 dets × cameras × hours
+            # For 24h run, safe to warn if < 20 GB free
+            if free_gb < 20:
+                logger.warning(
+                    "Disk space warning: only %.1f GB free in %s. "
+                    "Tracks CSVs for a 24h 9-camera run can reach ~5-10 GB.",
+                    free_gb, self.output_dir,
+                )
+            else:
+                logger.info("Disk space: %.1f GB free in %s. OK.", free_gb, self.output_dir)
+        except Exception:
+            pass  # non-critical check
+
         logger.info(
             "run_all: %d cameras, workers=%d, stride=%d, ocr_interval=%d",
             len(self.cameras), _workers, frame_stride, ocr_interval,

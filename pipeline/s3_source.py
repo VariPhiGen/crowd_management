@@ -176,8 +176,12 @@ class S3VideoSource:
                     pending.append(pool.submit(self._download, keys[next_submit]))
                     next_submit += 1
 
-                local_path = pending.popleft().result()
-                yield local_path
+                try:
+                    local_path = pending.popleft().result()
+                    yield local_path
+                except Exception as exc:
+                    # Yield the exception so the caller can log and skip
+                    yield exc  # type: ignore[misc]
 
     def delete_local(self, path: Path) -> None:
         """
@@ -210,8 +214,15 @@ class S3VideoSource:
                     keys.append(key)
         return sorted(keys)
 
-    def _download(self, key: str) -> Path:
-        """Download one S3 object to the temp dir and return its local Path."""
+    def _download(self, key: str, max_retries: int = 4) -> Path:
+        """
+        Download one S3 object to the temp dir and return its local Path.
+        Retries up to *max_retries* times with exponential backoff so that
+        transient network blips during a long multi-day run don't abort
+        an entire camera thread.
+        """
+        import time as _time
+
         filename   = Path(key).name
         local_path = self.tmp_dir / filename
 
@@ -219,7 +230,29 @@ class S3VideoSource:
             logger.info("[%s] Using cached local copy: %s", self.camera_id, filename)
             return local_path
 
-        logger.info("[%s] Downloading s3://%s/%s …", self.camera_id, self._bucket, key)
-        self._client.download_file(self._bucket, key, str(local_path))
-        logger.info("[%s] Download complete: %s", self.camera_id, filename)
-        return local_path
+        last_exc: Exception | None = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                logger.info(
+                    "[%s] Downloading s3://%s/%s … (attempt %d/%d)",
+                    self.camera_id, self._bucket, key, attempt, max_retries,
+                )
+                # Remove partial file from previous attempt if it exists
+                if local_path.exists():
+                    local_path.unlink()
+                self._client.download_file(self._bucket, key, str(local_path))
+                logger.info("[%s] Download complete: %s", self.camera_id, filename)
+                return local_path
+            except Exception as exc:
+                last_exc = exc
+                wait = 2 ** attempt   # 2, 4, 8, 16 seconds
+                logger.warning(
+                    "[%s] Download failed (attempt %d/%d): %s — retrying in %ds",
+                    self.camera_id, attempt, max_retries, exc, wait,
+                )
+                _time.sleep(wait)
+
+        # All retries exhausted — re-raise so the caller can skip this file
+        raise RuntimeError(
+            f"[{self.camera_id}] Failed to download {key} after {max_retries} attempts"
+        ) from last_exc
