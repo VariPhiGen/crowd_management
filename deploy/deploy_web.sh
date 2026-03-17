@@ -71,6 +71,9 @@ if [ ! -f "$WORKDIR/web_ui/.env" ]; then
     echo ""
 fi
 
+# Fix venv ownership (was created by root in user_data)
+sudo chown -R ubuntu:ubuntu "$VENV"
+
 # Install gunicorn in venv
 source "$VENV/bin/activate"
 pip install gunicorn -q
