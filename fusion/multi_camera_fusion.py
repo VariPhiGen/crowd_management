@@ -101,9 +101,11 @@ class CrossingFuser:
         overlap_zones_path: str,
         timestamp_tolerance_s: float = 1.0,
         config_dir: str = "config/",
+        distance_threshold_override_m: float | None = None,
     ):
-        self.timestamp_tolerance_s = timestamp_tolerance_s
-        self.config_dir            = config_dir
+        self.timestamp_tolerance_s         = timestamp_tolerance_s
+        self.distance_threshold_override_m = distance_threshold_override_m
+        self.config_dir                    = config_dir
         self.overlap_zones: List[Dict] = []
 
         # Per-camera reprojection error (metres) — populated lazily
@@ -266,9 +268,11 @@ class CrossingFuser:
         row_idx, col_idx = linear_sum_assignment(cost)
 
         # Accept pairs within the dynamic distance threshold
-        dyn_thresh = self._dynamic_threshold(
-            zone.get("distance_threshold_m", 1.0), cam_a, cam_b
-        )
+        # (UI override takes precedence over per-zone config value)
+        base_d = (self.distance_threshold_override_m
+                  if self.distance_threshold_override_m is not None
+                  else zone.get("distance_threshold_m", 1.0))
+        dyn_thresh = self._dynamic_threshold(base_d, cam_a, cam_b)
 
         identity_map: Dict[int, int] = {}
         for r, c in zip(row_idx, col_idx):
@@ -503,7 +507,9 @@ class CrossingFuser:
                     if z["shapely_poly"] is None or not z["shapely_poly"].contains(pt_b):
                         continue
 
-                    base_thresh = z.get("distance_threshold_m", 1.0)
+                    base_thresh = (self.distance_threshold_override_m
+                                   if self.distance_threshold_override_m is not None
+                                   else z.get("distance_threshold_m", 1.0))
                     dyn_thresh  = self._dynamic_threshold(base_thresh, cam_a, cam_b)
                     dist        = pt_a.distance(pt_b)
 

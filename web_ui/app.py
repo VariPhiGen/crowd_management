@@ -108,17 +108,21 @@ def dashboard():
 
             if action == 'process':
                 # Read performance / detection settings from form
-                workers      = int(request.form.get('workers', 4))
-                frame_stride = int(request.form.get('frame_stride', 2))
-                ocr_interval = int(request.form.get('ocr_interval', 0))
-                classes      = request.form.get('classes', 'person,car,motorcycle,truck').strip()
+                workers        = int(request.form.get('workers', 4))
+                frame_stride   = int(request.form.get('frame_stride', 2))
+                ocr_interval   = int(request.form.get('ocr_interval', 0))
+                classes        = request.form.get('classes', 'person,car,motorcycle,truck').strip()
+                fusion_time    = float(request.form.get('fusion_time_tol', 1.0))
+                fusion_dist    = float(request.form.get('fusion_dist_tol', 2.5))
 
                 cmd = [
                     python_exec, "main.py", "--process",
-                    "--workers",      str(workers),
-                    "--frame-stride", str(frame_stride),
-                    "--ocr-interval", str(ocr_interval),
-                    "--classes",      classes,
+                    "--workers",             str(workers),
+                    "--frame-stride",        str(frame_stride),
+                    "--ocr-interval",        str(ocr_interval),
+                    "--classes",             classes,
+                    "--timestamp-tolerance", str(fusion_time),
+                    "--fusion-dist-tol",     str(fusion_dist),
                 ]
 
                 OUTPUT_DIR.mkdir(exist_ok=True)
@@ -141,7 +145,13 @@ def dashboard():
                 )
 
             elif action == 'fuse':
-                cmd = [python_exec, "main.py", "--fuse-only"]
+                fusion_time = float(request.form.get('fusion_time_tol', 1.0))
+                fusion_dist = float(request.form.get('fusion_dist_tol', 2.5))
+                cmd = [
+                    python_exec, "main.py", "--fuse-only",
+                    "--timestamp-tolerance", str(fusion_time),
+                    "--fusion-dist-tol",     str(fusion_dist),
+                ]
 
                 log_file = OUTPUT_DIR / "pipeline_fuse.log"
                 log_f = open(log_file, 'w')

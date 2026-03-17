@@ -329,6 +329,12 @@ class LineCrossingDetector:
     #  Internal helpers
     # ──────────────────────────────────────────────────────────────────────
 
+    _TS_FMT = "%Y-%m-%dT%H:%M:%S.%f"
+
+    def _fmt_ts(self, dt: datetime) -> str:
+        """Always emit ISO-8601 with millisecond precision (consistent across all rows)."""
+        return dt.strftime(self._TS_FMT)[:-3]
+
     def _check_crossing(
         self,
         edge: dict,
@@ -382,7 +388,7 @@ class LineCrossingDetector:
             return None
 
         return {
-            "timestamp":    timestamp.isoformat(),
+            "timestamp":    self._fmt_ts(timestamp),
             "track_id":     track_id,
             "class_name":   class_name,
             "edge_id":      eid,

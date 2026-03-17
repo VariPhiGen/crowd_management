@@ -241,6 +241,7 @@ class PerCameraProcessor:
         ocr_call_count = 0
         ocr_failure_count = 0
         _last_ocr_ts: Optional[datetime] = None
+        _last_ocr_frame_idx: int = 0   # frame_idx at which last OCR succeeded
         _t_start = time.time()
 
         # ── Tracks CSV ────────────────────────────────────────────────────────
@@ -307,25 +308,33 @@ class PerCameraProcessor:
                              if self.lens_corrector.is_calibrated else raw_frame)
 
                     # ── OCR Timestamp (throttled) ────────────────────────────
-                    # Run OCR only every _ocr_interval frames; use FPS-adjusted
-                    # fallback for the frames in between — the timestamp on those
-                    # intermediate frames is accurate to ±1 frame anyway.
-                    if frame_idx % _ocr_interval == 1:   # 1 so first frame always runs
+                    # Always run OCR on the FIRST frame of each file (picks up
+                    # the new day/time even when videos span different days).
+                    # Otherwise run every _ocr_interval frames.
+                    # Between OCR calls, extrapolate from the LAST known OCR
+                    # timestamp rather than a hardcoded fallback date.
+                    _run_ocr = (_frames_in_file == 1) or (frame_idx % _ocr_interval == 1)
+
+                    def _extrapolate_ts() -> Optional[datetime]:
+                        """Extrapolate from last known OCR hit; None if never succeeded."""
+                        if _last_ocr_ts is None:
+                            return None
+                        delta = (frame_idx - _last_ocr_frame_idx) / max(1.0, self._fps)
+                        return _last_ocr_ts + timedelta(seconds=delta)
+
+                    if _run_ocr:
                         ts_dt = self.timestamp_extractor.extract(frame)
                         ocr_call_count += 1
                         if ts_dt is not None:
                             _last_ocr_ts = ts_dt
+                            _last_ocr_frame_idx = frame_idx
                         else:
                             ocr_failure_count += 1
-                            ts_dt = self.timestamp_extractor.get_fps_adjusted_timestamp(
-                                frame_number=frame_idx, fps=self._fps
-                            )
+                            ts_dt = _extrapolate_ts()
                     else:
-                        # FPS-interpolated from last known OCR time
-                        ts_dt = self.timestamp_extractor.get_fps_adjusted_timestamp(
-                            frame_number=frame_idx, fps=self._fps
-                        )
+                        ts_dt = _extrapolate_ts()
 
+                    # Absolute last-resort fallback (only if OCR has NEVER succeeded)
                     if ts_dt is None:
                         if not hasattr(self, '_fallback_base'):
                             self._fallback_base = datetime(2025, 1, 1, 12, 0, 0)

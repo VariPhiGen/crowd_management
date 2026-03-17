@@ -1206,6 +1206,10 @@ Examples
         help="Override fusion_config.json timestamp_tolerance_s for fusion",
     )
     parser.add_argument(
+        "--fusion-dist-tol", type=float, metavar="METERS", dest="fusion_dist_tol",
+        help="Override per-zone distance_threshold_m for cross-camera fusion matching",
+    )
+    parser.add_argument(
         "--append", action="store_true",
         help="Append to existing per-camera CSVs (crossings + tracks) instead of replacing",
     )
@@ -1644,7 +1648,12 @@ def main() -> None:
             except Exception:
                 tol = 1.0
                 
-        fuser = CrossingFuser(str(OVERLAP_CFG), timestamp_tolerance_s=tol, config_dir=str(CONFIG_DIR))
+        fuser = CrossingFuser(
+            str(OVERLAP_CFG),
+            timestamp_tolerance_s=tol,
+            config_dir=str(CONFIG_DIR),
+            distance_threshold_override_m=args.fusion_dist_tol,
+        )
         
         fused_df = fuser.fuse(csv_files)
         out_path = str(OUTPUT_DIR / "fused_crossings.csv")
@@ -1698,7 +1707,12 @@ def main() -> None:
             except Exception:
                 tol = 1.0
                 
-        fuser = CrossingFuser(str(OVERLAP_CFG), timestamp_tolerance_s=tol, config_dir=str(CONFIG_DIR))
+        fuser = CrossingFuser(
+            str(OVERLAP_CFG),
+            timestamp_tolerance_s=tol,
+            config_dir=str(CONFIG_DIR),
+            distance_threshold_override_m=args.fusion_dist_tol,
+        )
         fused_df = fuser.fuse(csv_paths)
         
         out_path = str(OUTPUT_DIR / "fused_crossings.csv")
