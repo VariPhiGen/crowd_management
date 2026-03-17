@@ -101,67 +101,84 @@ def dashboard():
     if request.method == 'POST':
         action = request.form.get('pipeline_action')
         try:
-            # We run these as background processes so the UI doesn't hang.
-            # Output is directed to standard out/err wherever the Flask app is running.
             env = os.environ.copy()
-            # Ensure it uses the activated venv Python if running from one, otherwise default python3
-            python_exec = "python3" 
+            # Always use the venv Python that runs this Flask app so torch/CUDA is available
+            import sys as _sys
+            python_exec = _sys.executable
 
             if action == 'process':
-                cmd = [python_exec, "main.py", "--process"]
-                
-                # Setup logs for main pipeline
+                # Read performance settings from form (with safe defaults)
+                workers      = int(request.form.get('workers', 4))
+                frame_stride = int(request.form.get('frame_stride', 2))
+                ocr_interval = int(request.form.get('ocr_interval', 0))
+
+                cmd = [
+                    python_exec, "main.py", "--process",
+                    "--workers",      str(workers),
+                    "--frame-stride", str(frame_stride),
+                    "--ocr-interval", str(ocr_interval),
+                ]
+
                 OUTPUT_DIR.mkdir(exist_ok=True)
                 log_file = OUTPUT_DIR / "pipeline_process.log"
                 log_f = open(log_file, 'w')
-                
-                proc = subprocess.Popen(cmd, cwd=str(PROJECT_ROOT), env=env, stdout=log_f, stderr=subprocess.STDOUT)
+
+                proc = subprocess.Popen(cmd, cwd=str(PROJECT_ROOT), env=env,
+                                        stdout=log_f, stderr=subprocess.STDOUT)
                 background_jobs["pipeline_main"] = {
-                    'process': proc,
-                    'log_file': str(log_file),
+                    'process':    proc,
+                    'log_file':   str(log_file),
                     'start_time': time.time(),
-                    'status': 'running',
-                    'name': 'Main Pipeline'
+                    'status':     'running',
+                    'name':       f'Main Pipeline (workers={workers}, stride={frame_stride})',
                 }
-                message = "Full pipeline processing started in the background. Check logs or Results page later."
-                
+                message = (
+                    f"Full pipeline started — {workers} cameras in parallel, "
+                    f"frame stride {frame_stride}, OCR every "
+                    f"{'auto (1 s)' if ocr_interval == 0 else str(ocr_interval) + ' frames'}. "
+                    "Check logs below."
+                )
+
             elif action == 'fuse':
                 cmd = [python_exec, "main.py", "--fuse-only"]
-                
+
                 log_file = OUTPUT_DIR / "pipeline_fuse.log"
                 log_f = open(log_file, 'w')
-                
-                proc = subprocess.Popen(cmd, cwd=str(PROJECT_ROOT), env=env, stdout=log_f, stderr=subprocess.STDOUT)
+
+                proc = subprocess.Popen(cmd, cwd=str(PROJECT_ROOT), env=env,
+                                        stdout=log_f, stderr=subprocess.STDOUT)
                 background_jobs["pipeline_fuse"] = {
-                    'process': proc,
-                    'log_file': str(log_file),
+                    'process':    proc,
+                    'log_file':   str(log_file),
                     'start_time': time.time(),
-                    'status': 'running',
-                    'name': 'Fusion Stage'
+                    'status':     'running',
+                    'name':       'Fusion Stage',
                 }
                 message = "Fusion stage started in the background."
-                
+
             elif action == 'visualize':
                 csv_path = OUTPUT_DIR / "fused_crossings.csv"
                 mp4_path = OUTPUT_DIR / "visualization.mp4"
                 if not csv_path.exists():
                     error = "Fused CSV not found. Please run the pipeline or fusion first."
                 else:
-                    cmd = [python_exec, "main.py", "--visualize", str(csv_path), "--headless-mp4", str(mp4_path)]
-                    
+                    cmd = [python_exec, "main.py", "--visualize", str(csv_path),
+                           "--headless-mp4", str(mp4_path)]
+
                     log_file = OUTPUT_DIR / "pipeline_visualize.log"
                     log_f = open(log_file, 'w')
-                    
-                    proc = subprocess.Popen(cmd, cwd=str(PROJECT_ROOT), env=env, stdout=log_f, stderr=subprocess.STDOUT)
+
+                    proc = subprocess.Popen(cmd, cwd=str(PROJECT_ROOT), env=env,
+                                            stdout=log_f, stderr=subprocess.STDOUT)
                     background_jobs["pipeline_visualize"] = {
-                        'process': proc,
-                        'log_file': str(log_file),
+                        'process':    proc,
+                        'log_file':   str(log_file),
                         'start_time': time.time(),
-                        'status': 'running',
-                        'name': 'Visualization Generation'
+                        'status':     'running',
+                        'name':       'Visualization Generation',
                     }
-                    message = "Visualization generation started. The MP4 will appear in Results when finished."
-                    
+                    message = "Visualization generation started. MP4 will appear in Results when finished."
+
         except Exception as e:
             error = f"Failed to start pipeline process: {e}"
 
