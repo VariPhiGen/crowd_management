@@ -175,9 +175,9 @@ def dashboard():
                 OUTPUT_DIR.mkdir(exist_ok=True)
                 log_file = OUTPUT_DIR / "pipeline_process.log"
                 log_f = open(log_file, 'w')
-
                 proc = subprocess.Popen(cmd, cwd=str(PROJECT_ROOT), env=env,
                                         stdout=log_f, stderr=subprocess.STDOUT)
+                log_f.close()
                 background_jobs["pipeline_main"] = {
                     'process':    proc,
                     'log_file':   str(log_file),
@@ -206,9 +206,9 @@ def dashboard():
 
                 log_file = OUTPUT_DIR / "pipeline_fuse.log"
                 log_f = open(log_file, 'w')
-
                 proc = subprocess.Popen(cmd, cwd=str(PROJECT_ROOT), env=env,
                                         stdout=log_f, stderr=subprocess.STDOUT)
+                log_f.close()
                 background_jobs["pipeline_fuse"] = {
                     'process':    proc,
                     'log_file':   str(log_file),
@@ -229,9 +229,9 @@ def dashboard():
 
                     log_file = OUTPUT_DIR / "pipeline_visualize.log"
                     log_f = open(log_file, 'w')
-
                     proc = subprocess.Popen(cmd, cwd=str(PROJECT_ROOT), env=env,
                                             stdout=log_f, stderr=subprocess.STDOUT)
+                    log_f.close()
                     background_jobs["pipeline_visualize"] = {
                         'process':    proc,
                         'log_file':   str(log_file),
@@ -244,10 +244,18 @@ def dashboard():
         except Exception as e:
             error = f"Failed to start pipeline process: {e}"
 
+    # Prune finished/failed jobs older than 10 minutes to avoid memory growth
+    _now = time.time()
+    _stale = [k for k, v in background_jobs.items()
+              if v['status'] in ('finished', 'failed', 'cancelled')
+              and (_now - v.get('start_time', _now)) > 600]
+    for k in _stale:
+        background_jobs.pop(k, None)
+
     # Get active global pipeline jobs for dashboard
     active_jobs = {}
-    for j_key, j_data in background_jobs.items():
-        if j_key.startswith("pipeline_"):
+    for j_key, j_data in list(background_jobs.items()):
+        if j_key.startswith("pipeline_") or j_key == 'floor_auto_config':
             if j_data['status'] == 'running':
                 poll = j_data['process'].poll()
                 if poll is not None:
@@ -257,14 +265,16 @@ def dashboard():
             if os.path.exists(j_data['log_file']):
                 try:
                     with open(j_data['log_file'], 'r', encoding='utf-8', errors='replace') as f:
-                        logs = f.readlines()[-5:]
+                        logs = f.readlines()[-8:]
                 except Exception:
                     logs = []
-            
+
             active_jobs[j_key] = {
-                'name': j_data['name'],
-                'status': j_data['status'],
-                'logs': "".join(logs)
+                'name':     j_data['name'],
+                'status':   j_data['status'],
+                'logs':     "".join(logs),
+                'log_file': j_data['log_file'],
+                'elapsed':  int(_now - j_data.get('start_time', _now)),
             }
 
     return render_template('dashboard.html', cameras=cameras, message=message, error=error,
@@ -305,6 +315,7 @@ def floor_config_action():
             cwd=str(PROJECT_ROOT), env=env,
             stdout=log_f, stderr=subprocess.STDOUT,
         )
+        log_f.close()
         background_jobs['floor_auto_config'] = {
             'process':    proc,
             'log_file':   str(log_file),
@@ -336,6 +347,63 @@ def floor_config_action():
             return redirect(url_for('dashboard') + f'?floor_err=Edge+regen+failed:+{e}')
 
     return redirect(url_for('dashboard'))
+
+
+@app.route('/api/system-health')
+def system_health():
+    """Return disk space, GPU VRAM, and running job count as JSON."""
+    import shutil
+    health = {}
+
+    # Disk space for output directory
+    try:
+        total, used, free = shutil.disk_usage(str(OUTPUT_DIR if OUTPUT_DIR.exists() else PROJECT_ROOT))
+        health['disk_free_gb']  = round(free  / 1e9, 1)
+        health['disk_total_gb'] = round(total / 1e9, 1)
+        health['disk_used_pct'] = round(used / total * 100, 1)
+    except Exception:
+        health['disk_free_gb'] = None
+
+    # GPU VRAM via nvidia-smi (non-blocking)
+    try:
+        import subprocess as _sp
+        out = _sp.check_output(
+            ['nvidia-smi', '--query-gpu=memory.used,memory.total,utilization.gpu',
+             '--format=csv,noheader,nounits'],
+            timeout=3
+        ).decode().strip()
+        parts = [p.strip() for p in out.split(',')]
+        health['gpu_vram_used_mb']  = int(parts[0])
+        health['gpu_vram_total_mb'] = int(parts[1])
+        health['gpu_util_pct']      = int(parts[2])
+    except Exception:
+        health['gpu_vram_used_mb'] = None
+
+    # Running jobs
+    health['running_jobs'] = sum(
+        1 for v in background_jobs.values() if v.get('status') == 'running'
+    )
+
+    return jsonify(health)
+
+
+@app.route('/api/job/<job_key>/log')
+def job_log(job_key):
+    """Return full log content for a background job (plain text)."""
+    if not session.get('logged_in'):
+        return "Unauthorized", 401
+    job = background_jobs.get(job_key)
+    if not job:
+        return "Job not found", 404
+    log_path = job.get('log_file', '')
+    if not log_path or not os.path.exists(log_path):
+        return "Log file not found", 404
+    try:
+        with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
+            content = f.read()
+        return content, 200, {'Content-Type': 'text/plain; charset=utf-8'}
+    except Exception as e:
+        return str(e), 500
 
 
 def parse_s3_uri(uri):
@@ -961,6 +1029,7 @@ def camera_intrinsic(cam_id):
         # Open log file for output
         log_f = open(log_file, 'w')
         proc = subprocess.Popen(cmd, cwd=str(PROJECT_ROOT), env=env, stdout=log_f, stderr=subprocess.STDOUT)
+        log_f.close()
         background_jobs[f"intrinsic_{cam_id}"] = {
             'process': proc,
             'log_file': str(log_file),

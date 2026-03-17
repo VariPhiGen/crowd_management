@@ -20,6 +20,17 @@
 </nav>
 
 <div class="container">
+
+    <!-- ── System Health Bar ─────────────────────────────────────────────── -->
+    <div id="health-bar" class="d-flex flex-wrap gap-3 align-items-center mb-3 px-3 py-2 rounded bg-white border shadow-sm small">
+        <span class="fw-semibold text-secondary me-1">System</span>
+        <span id="h-disk">💾 Disk: <span class="text-muted">…</span></span>
+        <span id="h-gpu">🎮 GPU: <span class="text-muted">…</span></span>
+        <span id="h-vram">VRAM: <span class="text-muted">…</span></span>
+        <span id="h-jobs">⚙ Jobs running: <span class="text-muted">…</span></span>
+        <span class="ms-auto text-muted" id="h-ts"></span>
+    </div>
+
     <div class="row mb-4">
         <div class="col-12">
             <div class="card shadow-sm">
@@ -201,28 +212,42 @@
                                 <th>Job Name</th>
                                 <th>Status</th>
                                 <th>Latest Log</th>
-                                <th class="text-end">Action</th>
+                                <th class="text-end">Actions</th>
                             </tr>
                         </thead>
                         <tbody>
                             {% for job_id, job in active_jobs.items() %}
                             <tr>
-                                <td class="align-middle fw-bold">{{ job.name }}</td>
+                                <td class="align-middle fw-bold">
+                                    {{ job.name }}
+                                    {% if job.elapsed %}
+                                    <br><small class="text-muted fw-normal">
+                                        {% if job.elapsed < 60 %}{{ job.elapsed }}s
+                                        {% else %}{{ (job.elapsed // 60) }}m {{ (job.elapsed % 60) }}s{% endif %}
+                                    </small>
+                                    {% endif %}
+                                </td>
                                 <td class="align-middle">
                                     {% if job.status == 'running' %}
-                                    <span class="badge bg-primary">Running</span>
+                                    <span class="badge bg-primary">▶ Running</span>
                                     {% elif job.status == 'finished' %}
-                                    <span class="badge bg-success">Finished</span>
+                                    <span class="badge bg-success">✓ Finished</span>
                                     {% elif job.status == 'failed' %}
-                                    <span class="badge bg-danger">Failed</span>
+                                    <span class="badge bg-danger">✗ Failed</span>
                                     {% elif job.status == 'cancelled' %}
                                     <span class="badge bg-secondary">Cancelled</span>
                                     {% endif %}
                                 </td>
-                                <td class="align-middle"><pre class="mb-0 small bg-dark text-light p-2 rounded" style="max-height: 80px; overflow-y: auto; font-size: 0.75rem;">{{ job.logs }}</pre></td>
+                                <td class="align-middle">
+                                    <pre class="mb-0 small bg-dark text-light p-2 rounded"
+                                         style="max-height:80px;overflow-y:auto;font-size:.72rem;white-space:pre-wrap;">{{ job.logs }}</pre>
+                                </td>
                                 <td class="align-middle text-end">
+                                    <a href="/api/job/{{ job_id }}/log" target="_blank"
+                                       class="btn btn-sm btn-outline-secondary mb-1">📄 Full Log</a>
                                     {% if job.status == 'running' %}
-                                    <button class="btn btn-sm btn-outline-danger" onclick="cancelJob('{{ job_id }}')">Cancel Job</button>
+                                    <br><button class="btn btn-sm btn-outline-danger"
+                                            onclick="cancelJob('{{ job_id }}')">Cancel</button>
                                     {% endif %}
                                 </td>
                             </tr>
@@ -390,16 +415,39 @@
                     <h6 class="mb-0">{{ cam.name }} <span class="badge bg-secondary float-end">{{ cam.id }}</span></h6>
                 </div>
                 <div class="card-body">
-                    <p class="small text-muted mb-2"><strong>Source:</strong> <br> <span class="text-truncate d-inline-block" style="max-width: 100%;">{{ cam.source }}</span></p>
-                    <a href="/camera/{{ cam.id }}" class="btn btn-sm btn-outline-primary w-100 mb-2">Manage S3 Uploads</a>
-                    <a href="/camera/{{ cam.id }}/coverage" class="btn btn-sm btn-outline-success w-100 mb-2">
-                        🗺 Draw Coverage Polygon
-                        {% if cam.floor_coverage_polygon %}
-                        <span class="badge bg-success ms-1">{{ cam.floor_coverage_polygon | length }}pts</span>
+                    <p class="small text-muted mb-2"><strong>Source:</strong> <br>
+                        <span class="text-truncate d-inline-block" style="max-width:100%;">{{ cam.source }}</span>
+                    </p>
+
+                    <!-- Setup status badges -->
+                    <div class="d-flex flex-wrap gap-1 mb-3">
+                        {% if cam.intrinsics and cam.intrinsics.calibrated %}
+                        <span class="badge bg-success">✓ Intrinsics</span>
                         {% else %}
-                        <span class="badge bg-warning text-dark ms-1">not set</span>
+                        <span class="badge bg-secondary">✗ Intrinsics</span>
                         {% endif %}
-                    </a>
+
+                        {% if cam.homography_matrix %}
+                        <span class="badge bg-success">✓ Homography</span>
+                        {% else %}
+                        <span class="badge bg-danger">✗ Homography</span>
+                        {% endif %}
+
+                        {% if cam.ocr_region %}
+                        <span class="badge bg-success">✓ OCR Region</span>
+                        {% else %}
+                        <span class="badge bg-danger">✗ OCR Region</span>
+                        {% endif %}
+
+                        {% if cam.floor_coverage_polygon %}
+                        <span class="badge bg-success">✓ Coverage ({{ cam.floor_coverage_polygon | length }}pts)</span>
+                        {% else %}
+                        <span class="badge bg-warning text-dark">✗ Coverage</span>
+                        {% endif %}
+                    </div>
+
+                    <a href="/camera/{{ cam.id }}" class="btn btn-sm btn-outline-primary w-100 mb-2">Manage S3 Uploads</a>
+                    <a href="/camera/{{ cam.id }}/coverage" class="btn btn-sm btn-outline-success w-100 mb-2">🗺 Draw Coverage Polygon</a>
                     <form method="POST" action="/camera/{{ cam.id }}/delete" class="d-inline w-100" onsubmit="return confirm('Remove camera {{ cam.name }} ({{ cam.id }}) from config?');">
                         <button type="submit" class="btn btn-sm btn-outline-danger w-100">Delete Camera</button>
                     </form>
@@ -416,6 +464,41 @@
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
 <script>
+    // ── System Health Bar ────────────────────────────────────────────────
+    function refreshHealth() {
+        fetch('/api/system-health')
+            .then(r => r.json())
+            .then(d => {
+                if (d.disk_free_gb !== null && d.disk_free_gb !== undefined) {
+                    const pct  = d.disk_used_pct;
+                    const col  = pct > 85 ? 'text-danger fw-bold' : pct > 70 ? 'text-warning fw-semibold' : 'text-success';
+                    document.getElementById('h-disk').innerHTML =
+                        `💾 Disk free: <span class="${col}">${d.disk_free_gb} GB</span> / ${d.disk_total_gb} GB (${pct}% used)`;
+                } else {
+                    document.getElementById('h-disk').innerHTML = '💾 Disk: <span class="text-muted">N/A</span>';
+                }
+                if (d.gpu_vram_used_mb !== null && d.gpu_vram_used_mb !== undefined) {
+                    const vPct = Math.round(d.gpu_vram_used_mb / d.gpu_vram_total_mb * 100);
+                    const vCol = vPct > 85 ? 'text-danger fw-bold' : vPct > 65 ? 'text-warning' : 'text-success';
+                    document.getElementById('h-gpu').innerHTML  =
+                        `🎮 GPU: <span class="${d.gpu_util_pct > 80 ? 'text-success fw-bold' : 'text-muted'}">${d.gpu_util_pct}%</span>`;
+                    document.getElementById('h-vram').innerHTML =
+                        `VRAM: <span class="${vCol}">${Math.round(d.gpu_vram_used_mb/1024*10)/10} / ${Math.round(d.gpu_vram_total_mb/1024*10)/10} GB</span>`;
+                } else {
+                    document.getElementById('h-gpu').innerHTML  = '🎮 GPU: <span class="text-muted">N/A</span>';
+                    document.getElementById('h-vram').innerHTML = '';
+                }
+                const jCol = d.running_jobs > 0 ? 'text-primary fw-bold' : 'text-muted';
+                document.getElementById('h-jobs').innerHTML =
+                    `⚙ Jobs running: <span class="${jCol}">${d.running_jobs}</span>`;
+                document.getElementById('h-ts').textContent =
+                    'Updated ' + new Date().toLocaleTimeString();
+            })
+            .catch(() => {});
+    }
+    refreshHealth();
+    setInterval(refreshHealth, 15000);   // refresh every 15 s
+
     function cancelJob(jobId) {
         if(confirm("Are you sure you want to cancel this job?")) {
             fetch(`/api/cancel_job/${jobId}`, {
