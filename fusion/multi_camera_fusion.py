@@ -382,6 +382,38 @@ class CrossingFuser:
         fused_records   = []
         matched_indices = set()
 
+        # ── Global person ID assignment ───────────────────────────────────────
+        # ByteTrack IDs are LOCAL per camera (both cam_1 and cam_2 start at 1).
+        # Here we assign a single incremental global_person_id so that the same
+        # physical person always gets the same number regardless of which camera
+        # saw them.
+        #
+        # Rules:
+        #   • When two events from different cameras are fused (same person),
+        #     both (cam_a, local_tid_a) and (cam_b, local_tid_b) map to one
+        #     global_person_id — assigned the first time either key is seen.
+        #   • Single-camera events that never matched another camera get their
+        #     own unique global_person_id.
+        #   • IDs are assigned in chronological order of first appearance, so
+        #     they are incremental by time (person 1 appears before person 2).
+        _gpid_counter: int = 0
+        _gpid_map: Dict[tuple, int] = {}   # (camera_id, local_track_id) → global_person_id
+
+        def _get_or_create_gpid(cam: str, tid) -> int:
+            nonlocal _gpid_counter
+            key = (str(cam), int(tid))
+            if key not in _gpid_map:
+                _gpid_counter += 1
+                _gpid_map[key] = _gpid_counter
+            return _gpid_map[key]
+
+        def _link_gpid(cam_primary: str, tid_primary, cam_secondary: str, tid_secondary) -> int:
+            """Ensure both camera-local IDs share the same global person ID."""
+            gpid = _get_or_create_gpid(cam_primary, tid_primary)
+            _gpid_map[(str(cam_secondary), int(tid_secondary))] = gpid
+            return gpid
+        # ─────────────────────────────────────────────────────────────────────
+
         def get_valid_zones(pt: Point, cam: str) -> List[Dict]:
             return [
                 z for z in self.overlap_zones
@@ -430,8 +462,6 @@ class CrossingFuser:
                 pt_b = points[idx_b]
 
                 # ── Trajectory pre-match check ────────────────────────────
-                # If the track identity map says cam_a.track_a == cam_b.track_b,
-                # accept this pair immediately — no spatial distance needed.
                 traj_partner = get_trajectory_partner(
                     cam_a, int(row_a["track_id"]),
                     cam_b, zones_a,
@@ -464,33 +494,38 @@ class CrossingFuser:
 
                 cam_b = row_b["camera_id"]
 
+                # Assign one shared global_person_id to both camera-local IDs
+                gpid = _link_gpid(cam_a, row_a["track_id"], cam_b, row_b["track_id"])
+
                 # Inverse-variance weighted position
                 fused_x, fused_y = self._weighted_fuse_xy(
                     row_a["crossing_x"], row_a["crossing_y"], cam_a,
                     row_b["crossing_x"], row_b["crossing_y"], cam_b,
                 )
 
-                # edge_id: randomly pick one of the two cameras' edge_id.
-                # Both are valid projections of the same physical crossing;
-                # neither is definitively "correct" when they differ.
                 import random
                 best_edge_id = random.choice([row_a["edge_id"], row_b["edge_id"]])
 
                 fused_records.append({
-                    "timestamp":  min(row_a["timestamp"], row_b["timestamp"]),
-                    "track_id":   row_a["track_id"],
-                    "class_name": row_a["class_name"],
-                    "edge_id":    best_edge_id,
-                    "direction":  row_a["direction"],
-                    "crossing_x": fused_x,
-                    "crossing_y": fused_y,
-                    "camera_id":  f"fused:{cam_a}+{cam_b}",
+                    "timestamp":        min(row_a["timestamp"], row_b["timestamp"]),
+                    "global_person_id": gpid,
+                    "track_id":         row_a["track_id"],
+                    "class_name":       row_a["class_name"],
+                    "edge_id":          best_edge_id,
+                    "direction":        row_a["direction"],
+                    "crossing_x":       fused_x,
+                    "crossing_y":       fused_y,
+                    "camera_id":        f"fused:{cam_a}+{cam_b}",
                 })
 
-        # Add unmatched records as-is
+        # Add unmatched records, assigning each a unique global_person_id
         for i in range(len(combined_df)):
             if i not in matched_indices:
-                fused_records.append(combined_df.iloc[i].to_dict())
+                row  = combined_df.iloc[i]
+                gpid = _get_or_create_gpid(str(row["camera_id"]), row["track_id"])
+                rec  = row.to_dict()
+                rec["global_person_id"] = gpid
+                fused_records.append(rec)
 
         fused_df = pd.DataFrame(fused_records)
         if not fused_df.empty:
@@ -499,10 +534,11 @@ class CrossingFuser:
 
         logger.info(
             "Fusion complete. %d original events → %d fused events "
-            "(%d duplicates removed).",
+            "(%d duplicates removed). %d unique global person IDs assigned.",
             len(combined_df),
             len(fused_df),
             len(combined_df) - len(fused_df),
+            _gpid_counter,
         )
         return fused_df
 
@@ -518,7 +554,7 @@ class CrossingFuser:
         if df.empty:
             logger.warning("Attempted to save empty fusion dataframe to %s", output_path)
             pd.DataFrame(columns=[
-                "timestamp", "track_id", "class_name", "edge_id",
+                "timestamp", "global_person_id", "track_id", "class_name", "edge_id",
                 "direction", "crossing_x", "crossing_y", "camera_id",
             ]).to_csv(output_path, index=False)
             return
@@ -527,8 +563,14 @@ class CrossingFuser:
         df_out["crossing_x"] = df_out["crossing_x"].round(2)
         df_out["crossing_y"] = df_out["crossing_y"].round(2)
 
+        # global_person_id: incremental cross-camera person identity.
+        # Ensure the column exists (older fused CSVs may not have it).
+        if "global_person_id" not in df_out.columns:
+            df_out["global_person_id"] = range(1, len(df_out) + 1)
+        df_out["global_person_id"] = df_out["global_person_id"].astype(int)
+
         cols = [
-            "timestamp", "track_id", "class_name", "edge_id",
+            "timestamp", "global_person_id", "track_id", "class_name", "edge_id",
             "direction", "crossing_x", "crossing_y", "camera_id",
         ]
         if pd.api.types.is_datetime64_any_dtype(df_out["timestamp"]):
