@@ -46,9 +46,11 @@ app.secret_key = os.environ.get("SECRET_KEY", "crimenabi-dev-key-change-in-prod"
 
 # --- Configuration paths ---
 PROJECT_ROOT = Path(__file__).parent.parent.resolve()
-CONFIG_DIR = PROJECT_ROOT / "config"
-CAMERAS_CFG = CONFIG_DIR / "cameras.json"
-OUTPUT_DIR = PROJECT_ROOT / "output"
+CONFIG_DIR   = PROJECT_ROOT / "config"
+CAMERAS_CFG  = CONFIG_DIR / "cameras.json"
+FLOOR_CFG    = CONFIG_DIR / "floor_config.json"
+EDGES_CFG    = CONFIG_DIR / "edges.json"
+OUTPUT_DIR   = PROJECT_ROOT / "output"
 
 # In-memory store for background job statuses
 background_jobs = {}
@@ -56,6 +58,36 @@ background_jobs = {}
 # ADMIN CREDENTIALS
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "password123")
+
+def get_floor_config() -> dict:
+    """Read floor_config.json; return sensible defaults if missing."""
+    defaults = {
+        "floor_width_m": 30.0, "floor_height_m": 86.5,
+        "grid_cell_size_m": 1.0, "major_grid_every_m": 5,
+        "origin": "bottom_left", "floor_origin_x_m": 0.0, "floor_origin_y_m": 0.0,
+    }
+    try:
+        with open(FLOOR_CFG) as f:
+            data = json.load(f)
+        defaults.update(data)
+    except Exception:
+        pass
+    return defaults
+
+
+def get_edges_info() -> dict:
+    """Return basic info about edges.json (count, step, auto flag)."""
+    try:
+        with open(EDGES_CFG) as f:
+            data = json.load(f)
+        return {
+            "count":   len(data.get("edges", [])),
+            "step_m":  data.get("step_m", 1.0),
+            "is_auto": data.get("_auto", False),
+        }
+    except Exception:
+        return {"count": 0, "step_m": 1.0, "is_auto": True}
+
 
 def get_cameras():
     """Reads cameras.json to get the list of active cameras."""
@@ -94,9 +126,11 @@ def logout():
 
 @app.route('/', methods=['GET', 'POST'])
 def dashboard():
-    cameras = get_cameras()
-    message = None
-    error = None
+    cameras      = get_cameras()
+    floor_cfg    = get_floor_config()
+    edges_info   = get_edges_info()
+    message = request.args.get('floor_msg') or None
+    error   = request.args.get('floor_err') or None
     # Default: all cameras selected; remembered across POST so checkboxes persist
     all_cam_ids = [c['id'] for c in cameras]
     selected_cameras = all_cam_ids  # overwritten on POST
@@ -234,7 +268,75 @@ def dashboard():
             }
 
     return render_template('dashboard.html', cameras=cameras, message=message, error=error,
-                           active_jobs=active_jobs, selected_cameras=selected_cameras)
+                           active_jobs=active_jobs, selected_cameras=selected_cameras,
+                           floor_cfg=floor_cfg, edges_info=edges_info)
+
+@app.route('/api/floor-config', methods=['POST'])
+def floor_config_action():
+    """Handle floor config save / auto-compute / edge regeneration."""
+    import sys as _sys
+    action     = request.form.get('floor_action')
+    python_exec = _sys.executable
+
+    if action == 'save':
+        # Read submitted values and persist to floor_config.json
+        try:
+            current = get_floor_config()
+            current['floor_width_m']    = float(request.form.get('floor_width_m',    current['floor_width_m']))
+            current['floor_height_m']   = float(request.form.get('floor_height_m',   current['floor_height_m']))
+            current['grid_cell_size_m'] = float(request.form.get('grid_cell_size_m', current['grid_cell_size_m']))
+            current['major_grid_every_m'] = int(request.form.get('major_grid_every_m', current['major_grid_every_m']))
+            current['floor_origin_x_m'] = float(request.form.get('floor_origin_x_m', current.get('floor_origin_x_m', 0.0)))
+            current['floor_origin_y_m'] = float(request.form.get('floor_origin_y_m', current.get('floor_origin_y_m', 0.0)))
+            with open(FLOOR_CFG, 'w') as f:
+                json.dump(current, f, indent=2)
+            return redirect(url_for('dashboard') + '?floor_msg=Floor+config+saved+successfully.')
+        except Exception as e:
+            return redirect(url_for('dashboard') + f'?floor_err=Save+failed:+{e}')
+
+    elif action == 'auto_compute':
+        # Run --auto-config in background
+        log_file = OUTPUT_DIR / "auto_config.log"
+        OUTPUT_DIR.mkdir(exist_ok=True)
+        log_f = open(log_file, 'w')
+        env   = os.environ.copy()
+        proc  = subprocess.Popen(
+            [python_exec, 'main.py', '--auto-config'],
+            cwd=str(PROJECT_ROOT), env=env,
+            stdout=log_f, stderr=subprocess.STDOUT,
+        )
+        background_jobs['floor_auto_config'] = {
+            'process':    proc,
+            'log_file':   str(log_file),
+            'start_time': time.time(),
+            'status':     'running',
+            'name':       'Auto-compute Floor Config',
+        }
+        return redirect(url_for('dashboard') + '?floor_msg=Auto-compute+started.+Check+Running+Jobs.')
+
+    elif action == 'regen_edges':
+        # Regenerate edges.json synchronously (fast — pure Python)
+        try:
+            import sys as _sys
+            _old_path = list(_sys.path)
+            if str(PROJECT_ROOT) not in _sys.path:
+                _sys.path.insert(0, str(PROJECT_ROOT))
+            from fusion.crossing import generate_edges
+            step_m    = float(request.form.get('step_m', 1.0))
+            fc        = get_floor_config()
+            edges     = generate_edges(
+                floor_width_m  = fc['floor_width_m'],
+                floor_height_m = fc['floor_height_m'],
+                step_m         = step_m,
+                save_path      = EDGES_CFG,
+            )
+            _sys.path = _old_path
+            return redirect(url_for('dashboard') + f'?floor_msg=Edges+regenerated:+{len(edges)}+lines+at+{step_m}m+step.')
+        except Exception as e:
+            return redirect(url_for('dashboard') + f'?floor_err=Edge+regen+failed:+{e}')
+
+    return redirect(url_for('dashboard'))
+
 
 def parse_s3_uri(uri):
     """Parse s3://bucket/prefix into bucket and prefix."""

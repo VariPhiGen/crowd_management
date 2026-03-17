@@ -235,6 +235,101 @@
     </div>
     {% endif %}
 
+    <!-- ── Floor Configuration Card ─────────────────────────────────────── -->
+    <div class="row mb-4">
+        <div class="col-12">
+            <div class="card shadow-sm">
+                <div class="card-header bg-white d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0 text-primary">Floor Configuration</h5>
+                    <span class="badge bg-secondary">
+                        {{ edges_info.count }} edges &nbsp;·&nbsp; {{ edges_info.step_m }} m step
+                        {% if edges_info.is_auto %}<span class="ms-1 badge bg-warning text-dark">auto</span>{% endif %}
+                    </span>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted small mb-3">
+                        Define physical floor dimensions and regenerate the virtual counting-edge grid.
+                        Use <strong>Auto-compute</strong> to derive dimensions from camera coverage polygons,
+                        or edit manually and save.
+                    </p>
+
+                    <!-- ── Save floor_config.json ─── -->
+                    <form method="POST" action="/api/floor-config" class="mb-3">
+                        <input type="hidden" name="floor_action" value="save">
+                        <div class="row g-3 align-items-end p-3 bg-light rounded border">
+                            <div class="col-12 pb-0">
+                                <span class="fw-semibold small text-secondary text-uppercase">Floor Dimensions &amp; Grid</span>
+                            </div>
+                            <div class="col-auto">
+                                <label class="form-label fw-semibold mb-1">Width (m) <span class="text-muted fw-normal small">X axis</span></label>
+                                <input type="number" class="form-control form-control-sm" name="floor_width_m"
+                                       value="{{ floor_cfg.floor_width_m }}" min="1" max="500" step="0.5" style="width:100px">
+                            </div>
+                            <div class="col-auto">
+                                <label class="form-label fw-semibold mb-1">Height (m) <span class="text-muted fw-normal small">Y axis</span></label>
+                                <input type="number" class="form-control form-control-sm" name="floor_height_m"
+                                       value="{{ floor_cfg.floor_height_m }}" min="1" max="500" step="0.5" style="width:100px">
+                            </div>
+                            <div class="col-auto">
+                                <label class="form-label fw-semibold mb-1">Origin X (m)</label>
+                                <input type="number" class="form-control form-control-sm" name="floor_origin_x_m"
+                                       value="{{ floor_cfg.floor_origin_x_m | default(0.0) }}" step="0.5" style="width:100px">
+                                <div class="form-text">Floor offset X</div>
+                            </div>
+                            <div class="col-auto">
+                                <label class="form-label fw-semibold mb-1">Origin Y (m)</label>
+                                <input type="number" class="form-control form-control-sm" name="floor_origin_y_m"
+                                       value="{{ floor_cfg.floor_origin_y_m | default(0.0) }}" step="0.5" style="width:100px">
+                                <div class="form-text">Floor offset Y</div>
+                            </div>
+                            <div class="col-auto">
+                                <label class="form-label fw-semibold mb-1">Minor Grid (m)</label>
+                                <input type="number" class="form-control form-control-sm" name="grid_cell_size_m"
+                                       value="{{ floor_cfg.grid_cell_size_m }}" min="0.5" max="10" step="0.5" style="width:90px">
+                                <div class="form-text">Small grid spacing</div>
+                            </div>
+                            <div class="col-auto">
+                                <label class="form-label fw-semibold mb-1">Major Grid (m)</label>
+                                <input type="number" class="form-control form-control-sm" name="major_grid_every_m"
+                                       value="{{ floor_cfg.major_grid_every_m }}" min="1" max="50" step="1" style="width:90px">
+                                <div class="form-text">Bold line every N m</div>
+                            </div>
+                            <div class="col-auto align-self-end">
+                                <button type="submit" class="btn btn-primary btn-sm">
+                                    💾 Save Floor Config
+                                </button>
+                            </div>
+                        </div>
+                    </form>
+
+                    <!-- ── Auto-compute from cameras ─── -->
+                    <form method="POST" action="/api/floor-config" class="d-inline me-2">
+                        <input type="hidden" name="floor_action" value="auto_compute">
+                        <button type="submit" class="btn btn-outline-secondary btn-sm">
+                            ⟳ Auto-compute from Cameras
+                        </button>
+                    </form>
+                    <small class="text-muted me-4">Reads camera coverage polygons → updates floor width &amp; height + overlap zones</small>
+
+                    <!-- ── Regenerate edges.json ─── -->
+                    <form method="POST" action="/api/floor-config" class="d-inline align-items-center">
+                        <input type="hidden" name="floor_action" value="regen_edges">
+                        <div class="d-inline-flex align-items-center gap-2">
+                            <label class="form-label mb-0 fw-semibold small">Edge step (m)</label>
+                            <input type="number" class="form-control form-control-sm" name="step_m"
+                                   value="{{ edges_info.step_m }}" min="0.5" max="10" step="0.5" style="width:80px">
+                            <button type="submit" class="btn btn-outline-warning btn-sm text-dark">
+                                ⚡ Regenerate Edges
+                            </button>
+                            <small class="text-muted">Rebuilds edges.json grid from floor dimensions</small>
+                        </div>
+                    </form>
+
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="d-flex justify-content-between align-items-center mt-4 mb-3">
         <h4 class="mb-0">Registered Cameras</h4>
         <button class="btn btn-sm btn-success shadow-sm" data-bs-toggle="modal" data-bs-target="#addCameraModal">+ Add Camera</button>
