@@ -14,6 +14,7 @@
 # =============================================================================
 
 set -euo pipefail
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin
 
 WORKDIR="/home/ubuntu/crowd_management"
 VENV="/opt/crimenabi_venv"
