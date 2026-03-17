@@ -116,6 +116,9 @@ def dashboard():
                 track_point    = request.form.get('track_point', 'bottom').strip()
                 fusion_time    = float(request.form.get('fusion_time_tol', 1.0))
                 fusion_dist    = float(request.form.get('fusion_dist_tol', 2.5))
+                # Camera selection — empty list means "all cameras"
+                selected_cams  = request.form.getlist('camera_ids')
+                cameras_arg    = ','.join(selected_cams) if selected_cams else None
 
                 cmd = [
                     python_exec, "main.py", "--process",
@@ -128,6 +131,8 @@ def dashboard():
                     "--timestamp-tolerance", str(fusion_time),
                     "--fusion-dist-tol",     str(fusion_dist),
                 ]
+                if cameras_arg:
+                    cmd += ["--cameras", cameras_arg]
 
                 OUTPUT_DIR.mkdir(exist_ok=True)
                 log_file = OUTPUT_DIR / "pipeline_process.log"
@@ -149,13 +154,17 @@ def dashboard():
                 )
 
             elif action == 'fuse':
-                fusion_time = float(request.form.get('fusion_time_tol', 1.0))
-                fusion_dist = float(request.form.get('fusion_dist_tol', 2.5))
+                fusion_time   = float(request.form.get('fusion_time_tol', 1.0))
+                fusion_dist   = float(request.form.get('fusion_dist_tol', 2.5))
+                selected_cams = request.form.getlist('camera_ids')
+                cameras_arg   = ','.join(selected_cams) if selected_cams else None
                 cmd = [
                     python_exec, "main.py", "--fuse-only",
                     "--timestamp-tolerance", str(fusion_time),
                     "--fusion-dist-tol",     str(fusion_dist),
                 ]
+                if cameras_arg:
+                    cmd += ["--cameras", cameras_arg]
 
                 log_file = OUTPUT_DIR / "pipeline_fuse.log"
                 log_f = open(log_file, 'w')

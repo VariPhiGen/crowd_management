@@ -464,6 +464,7 @@ class MultiCameraRunner:
         target_classes: "str | list[int] | None" = None,
         confidence: float = 0.50,
         track_point: str = "bottom",
+        camera_ids: "list[str] | None" = None,
     ) -> None:
         self.config_dir    = Path(config_dir)
         self.output_dir    = Path(output_dir)
@@ -475,7 +476,15 @@ class MultiCameraRunner:
         with open(cameras_cfg_path) as f:
             cameras_data = json.load(f)
 
-        self.cameras = cameras_data.get("cameras", [])
+        all_cameras = cameras_data.get("cameras", [])
+        if camera_ids:
+            selected = set(camera_ids)
+            self.cameras = [c for c in all_cameras if c["id"] in selected]
+            skipped = [c["id"] for c in all_cameras if c["id"] not in selected]
+            if skipped:
+                logger.info("Camera filter active — skipping: %s", skipped)
+        else:
+            self.cameras = all_cameras
 
         # Reference detector carries model_name / confidence / track_point
         # for worker threads — each thread creates its own instance.

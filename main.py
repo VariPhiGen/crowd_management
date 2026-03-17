@@ -1247,6 +1247,11 @@ Examples
         help="Skip interactive windows and user prompts (saves validation checks to file)",
     )
     parser.add_argument(
+        "--cameras", type=str, default=None, metavar="CAM_IDS",
+        help="Comma-separated camera IDs to process/fuse (default: all configured cameras). "
+             "Example: --cameras cam_1,cam_3,cam_5",
+    )
+    parser.add_argument(
         "--confidence", type=float, default=0.50, metavar="CONF",
         help="Detection confidence threshold (0.0–1.0, default 0.50)",
     )
@@ -1633,9 +1638,18 @@ def main() -> None:
         
         print(f"\n[Pipeline] Running multi-camera fusion on existing CSVs...")
         csv_files = glob.glob(str(OUTPUT_DIR / "*_crossings.csv"))
-        # Exclude the fused output itself if passing multiple times
         csv_files = [f for f in csv_files if "fused_crossings" not in f]
-        
+
+        # Optional camera filter
+        if args.cameras:
+            _cam_ids = [c.strip() for c in args.cameras.split(",")]
+            csv_files = [
+                f for f in csv_files
+                if any(Path(f).stem.startswith(cid + "_") or Path(f).stem == cid
+                       for cid in _cam_ids)
+            ]
+            print(f"Camera filter active: {_cam_ids}")
+
         if not csv_files:
             print(f"  ✗  No per-camera CSVs found in {OUTPUT_DIR}/")
             sys.exit(1)
@@ -1686,6 +1700,7 @@ def main() -> None:
         print("  ✓  All configs validated. Starting YOLO extraction...")
         
         # 1. Pipeline Runner
+        _cam_ids = [c.strip() for c in args.cameras.split(",")] if args.cameras else None
         runner = MultiCameraRunner(
             config_dir     = str(CONFIG_DIR),
             output_dir     = str(OUTPUT_DIR),
@@ -1694,6 +1709,7 @@ def main() -> None:
             target_classes = args.classes,
             confidence     = args.confidence,
             track_point    = args.track_point,
+            camera_ids     = _cam_ids,
         )
         csv_paths = runner.run_all(
             sequential    = False,
