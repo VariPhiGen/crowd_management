@@ -407,57 +407,118 @@ def camera_detail(cam_id):
                         error = f"Failed to delete: {e}"
             
             elif action == 'drive_import':
-                drive_url = request.form.get('drive_url', '').strip()
-                if not drive_url:
-                    error = "Please provide a Google Drive folder URL."
+                raw_input = request.form.get('drive_url', '').strip()
+                if not raw_input:
+                    error = "Please provide at least one Google Drive URL."
                 else:
                     try:
                         import gdown
                         import tempfile
                         import shutil
-                        
-                        # Create a temp folder for downloading
-                        tmp_dir = tempfile.mkdtemp(prefix='gdrive_import_')
-                        
-                        # Determine if it's a folder or a single file URL
-                        if 'drive.google.com/drive' in drive_url and 'folders' in drive_url:
-                            # Download all files in the folder
-                            gdown.download_folder(drive_url, output=tmp_dir, quiet=True, use_cookies=False)
-                        else:
-                            # Single file download
-                            gdown.download(drive_url, output=tmp_dir + '/', quiet=True, fuzzy=True)
-                        
-                        # Upload each video file found to S3
+
                         VIDEO_EXTS = {'.mp4', '.avi', '.mov', '.mkv', '.ts'}
-                        uploaded = []
-                        failed = []
-                        
-                        # Recursively find all video files in tmp_dir
-                        for root, dirs, files_found in os.walk(tmp_dir):
-                            for fname in files_found:
-                                if Path(fname).suffix.lower() in VIDEO_EXTS:
-                                    local_path = os.path.join(root, fname)
-                                    s3_key = f"{prefix}{fname}"
-                                    try:
-                                        with open(local_path, 'rb') as fh:
-                                            s3.upload_fileobj(fh, bucket, s3_key)
-                                        uploaded.append(fname)
-                                    except Exception as upload_err:
-                                        failed.append(f"{fname}: {upload_err}")
-                        
-                        # Cleanup temp directory
-                        shutil.rmtree(tmp_dir, ignore_errors=True)
-                        
+                        uploaded, failed, warnings = [], [], []
+
+                        # Split input into individual lines — supports both:
+                        #   • single folder URL  (one line, contains "folders/")
+                        #   • multiple file URLs (one per line — bypasses 50-file limit)
+                        urls = [u.strip() for u in raw_input.splitlines() if u.strip()]
+
+                        def _upload_file(local_path: str, fname: str):
+                            s3_key = f"{prefix}{fname}"
+                            with open(local_path, 'rb') as fh:
+                                s3.upload_fileobj(fh, bucket, s3_key)
+                            uploaded.append(fname)
+
+                        def _process_tmp(tmp_dir: str):
+                            """Walk tmp_dir and upload every video found to S3."""
+                            for root, _, files_found in os.walk(tmp_dir):
+                                for fname in files_found:
+                                    if Path(fname).suffix.lower() in VIDEO_EXTS:
+                                        try:
+                                            _upload_file(os.path.join(root, fname), fname)
+                                        except Exception as up_err:
+                                            failed.append(f"{fname}: {up_err}")
+
+                        if len(urls) == 1 and 'folders' in urls[0]:
+                            # ── Single folder URL ─────────────────────────────
+                            tmp_dir = tempfile.mkdtemp(prefix='gdrive_import_')
+                            try:
+                                try:
+                                    gdown.download_folder(
+                                        urls[0], output=tmp_dir,
+                                        quiet=False, use_cookies=False,
+                                        remaining_ok=False,
+                                    )
+                                except RuntimeError as folder_err:
+                                    msg = str(folder_err)
+                                    if 'more than 50 files' in msg or 'remaining_ok' in msg:
+                                        # Download the first 50, warn about the rest
+                                        gdown.download_folder(
+                                            urls[0], output=tmp_dir,
+                                            quiet=False, use_cookies=False,
+                                            remaining_ok=True,
+                                        )
+                                        warnings.append(
+                                            "Folder has more than 50 files — Google Drive's "
+                                            "bulk limit. Only the first 50 were downloaded. "
+                                            "To import the rest, paste each file's individual "
+                                            "sharing link (one per line) in the box below."
+                                        )
+                                    else:
+                                        raise
+                                _process_tmp(tmp_dir)
+                            finally:
+                                shutil.rmtree(tmp_dir, ignore_errors=True)
+
+                        else:
+                            # ── One or more individual file URLs ──────────────
+                            # This path has NO 50-file limit — each file is
+                            # downloaded independently, so 200+ files work fine.
+                            for url in urls:
+                                if not url.startswith('http'):
+                                    continue
+                                tmp_dir = tempfile.mkdtemp(prefix='gdrive_file_')
+                                try:
+                                    out = gdown.download(
+                                        url, output=tmp_dir + '/',
+                                        quiet=False, fuzzy=True,
+                                    )
+                                    if out:
+                                        fname = Path(out).name
+                                        if Path(fname).suffix.lower() in VIDEO_EXTS:
+                                            try:
+                                                _upload_file(out, fname)
+                                            except Exception as up_err:
+                                                failed.append(f"{fname}: {up_err}")
+                                        else:
+                                            warnings.append(
+                                                f"Skipped '{fname}' — not a video file."
+                                            )
+                                    else:
+                                        failed.append(f"{url[:60]}… — download returned nothing")
+                                except Exception as dl_err:
+                                    failed.append(f"{url[:60]}…: {dl_err}")
+                                finally:
+                                    shutil.rmtree(tmp_dir, ignore_errors=True)
+
+                        # ── Build result message ──────────────────────────────
                         if uploaded:
-                            success = f"Successfully imported {len(uploaded)} video(s) to S3: {', '.join(uploaded)}"
+                            success = (
+                                f"Imported {len(uploaded)} video(s) → "
+                                f"s3://{bucket}/{prefix}:  "
+                                + ', '.join(uploaded)
+                            )
                         elif not failed:
-                            error = "No video files were found in the provided Google Drive folder."
-                        
+                            error = "No video files were found at the provided URL(s)."
+
+                        if warnings:
+                            success = (success or '') + '  ⚠ ' + '  ⚠ '.join(warnings)
                         if failed:
-                            error = (error or '') + f" Failed: {'; '.join(failed)}"
-                    
+                            error = (error or '') + '  Failed: ' + ';  '.join(failed)
+
                     except ImportError:
-                        error = "gdown is not installed. Run: pip3 install gdown"
+                        error = "gdown is not installed. Run: pip install gdown"
                     except Exception as e:
                         error = f"Drive import failed: {e}"
 

@@ -58,18 +58,34 @@
                 <div class="card-body">
                     <form method="POST" id="driveImportForm">
                         <input type="hidden" name="action" value="drive_import">
-                        <div class="mb-3">
-                            <label class="form-label small fw-medium">Google Drive Folder / File URL</label>
-                            <input class="form-control" type="url" name="drive_url"
-                                   placeholder="https://drive.google.com/drive/folders/..."
-                                   required>
-                            <div class="form-text">Paste a <strong>public</strong> Google Drive folder link. All video files inside will be downloaded and uploaded to <code>s3://{{ bucket }}/{{ prefix }}</code>.
-                            </div>
+                        <div class="mb-2">
+                            <label class="form-label fw-semibold">Google Drive URL(s)</label>
+                            <textarea class="form-control font-monospace" name="drive_url" rows="5"
+                                      placeholder="Option A — folder URL (up to 50 files):&#10;https://drive.google.com/drive/folders/ABC123...&#10;&#10;Option B — individual file links, one per line (no limit):&#10;https://drive.google.com/file/d/FILE_ID_1/view?usp=sharing&#10;https://drive.google.com/file/d/FILE_ID_2/view?usp=sharing"
+                                      required></textarea>
+                        </div>
+
+                        <div class="alert alert-info py-2 small mb-2">
+                            <strong>Two modes:</strong><br>
+                            <b>Folder URL</b> — paste one folder link (works for ≤ 50 files).<br>
+                            <b>Individual file links</b> — paste each file's sharing link, <em>one per line</em>.
+                            This has <strong>no file-count limit</strong> and is the correct approach for NVR folders with hundreds of recordings.
                         </div>
                         <div class="alert alert-warning py-2 small mb-3">
-                            ⚠️ Make sure your Drive folder is set to <strong>"Anyone with the link"</strong> sharing before importing.
+                            ⚠️ Set Drive sharing to <strong>"Anyone with the link"</strong> before importing.
+                            All files will be uploaded to <code>s3://{{ bucket }}/{{ prefix }}</code>.
                         </div>
-                        <button type="submit" class="btn btn-primary w-100" onclick="this.disabled=true;this.innerHTML='⏳ Downloading &amp; Uploading... please wait';this.form.submit();">
+
+                        <div class="mb-3 p-2 bg-light rounded border small">
+                            <strong>How to get individual file links for a large folder:</strong><br>
+                            1. Open the Google Drive folder<br>
+                            2. Select all files → right-click → <em>Share</em> → set to "Anyone with the link"<br>
+                            3. Right-click each file → <em>Get link</em> → paste here, one per line<br>
+                            <em>Or use Google Takeout / rclone for very large datasets.</em>
+                        </div>
+
+                        <button type="submit" class="btn btn-primary w-100"
+                                onclick="this.disabled=true;this.innerHTML='⏳ Downloading &amp; Uploading… please wait (large folders may take several minutes)';this.form.submit();">
                             Import Videos from Drive → S3
                         </button>
                     </form>
