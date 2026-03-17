@@ -28,6 +28,9 @@ echo "============================================================"
 
 # ── 1. Pull latest code ───────────────────────────────────────────────────────
 echo "[1/5] Pulling latest code from GitHub..."
+# Fix ownership if repo was cloned by root during user_data setup
+sudo chown -R ubuntu:ubuntu "$WORKDIR" 2>/dev/null || true
+git config --global --add safe.directory "$WORKDIR" 2>/dev/null || true
 cd "$WORKDIR"
 git pull origin main
 echo "  ✓ Code up to date"
