@@ -213,6 +213,9 @@ class LensCorrector:
             (c for c in config["cameras"] if c["id"] == self.camera_id), None
         )
         if entry is not None:
+            # Create the "intrinsics" sub-dict if this camera was added without one
+            if "intrinsics" not in entry:
+                entry["intrinsics"] = {}
             entry["intrinsics"]["camera_matrix"]     = self.camera_matrix.tolist()
             entry["intrinsics"]["dist_coeffs"]       = self.dist_coeffs.tolist()
             entry["intrinsics"]["new_camera_matrix"] = self.new_camera_matrix.tolist()
