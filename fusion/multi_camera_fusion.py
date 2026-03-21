@@ -503,10 +503,6 @@ class CrossingFuser:
                     break
 
                 # ── Fallback: spatial+temporal check ──────────────────────
-                # Different edge_ids mean different physical crossings — don't merge.
-                if row_a["edge_id"] != row_b["edge_id"]:
-                    continue
-
                 for z in zones_a:
                     if cam_b not in z.get("cameras", []):
                         continue

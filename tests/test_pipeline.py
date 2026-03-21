@@ -249,16 +249,17 @@ def test_fusion_no_false_merge(tmp_path):
         
     csv_a = tmp_path / "camA_crossings.csv"
     csv_b = tmp_path / "camB_crossings.csv"
-    
-    # Same coords and times, but completely different edges crossed
-    create_mock_crossings_csv([{"timestamp": "2025-03-14 10:00:01", "edge_id": "E1", "crossing_x": 3.0, "crossing_y": 5.0, "camera_id": "camA"}], csv_a)
-    create_mock_crossings_csv([{"timestamp": "2025-03-14 10:00:01", "edge_id": "E2", "crossing_x": 3.0, "crossing_y": 5.0, "camera_id": "camB"}], csv_b)
-    
+
+    # Two different people crossing at the same time but spatially far apart (> 0.5 m threshold).
+    # Same camera can also assign the same edge_id to two different people, so edge_id alone
+    # is NOT a reliable "different event" signal — spatial separation is the correct criterion.
+    create_mock_crossings_csv([{"timestamp": "2025-03-14 10:00:01", "edge_id": "E1", "crossing_x": 2.0, "crossing_y": 2.0, "camera_id": "camA"}], csv_a)
+    create_mock_crossings_csv([{"timestamp": "2025-03-14 10:00:01", "edge_id": "E1", "crossing_x": 8.0, "crossing_y": 8.0, "camera_id": "camB"}], csv_b)
+
     fuser = CrossingFuser(str(overlap_cfg_path), timestamp_tolerance_s=1.0)
     df = fuser.fuse([str(csv_a), str(csv_b)])
-    
-    # Both survive because they are distinct physical events (different edges)
-    # A bug in CrossingFuser caused duplicate rows due to concatenation + append. Let's strictly test final length.
+
+    # Both survive: dist ≈ 8.49 m >> 0.5 m threshold — genuinely different people.
     assert len(df) == 2
 
 def test_fusion_single_camera(tmp_path):
