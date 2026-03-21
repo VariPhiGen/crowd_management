@@ -96,6 +96,10 @@ def main():
     # ── Launch check (tag enforcement) ────────────────────────────────────────
     print("\n[EC2 Launch — dry run with DryRun=True]")
     def _dry_run_launch():
+        required_tags = [
+            {"Key": "Company", "Value": "Variphi"},
+            {"Key": "Project", "Value": "Crimenabi"},
+        ]
         try:
             ec2.run_instances(
                 ImageId      = "ami-0d52744d6551d851e",
@@ -104,13 +108,19 @@ def main():
                 MaxCount     = 1,
                 DryRun       = True,
                 IamInstanceProfile = {"Name": "variphi-ec2-analysis-profile"},
-                TagSpecifications  = [{
-                    "ResourceType": "instance",
-                    "Tags": [
-                        {"Key": "Company", "Value": "Variphi"},
-                        {"Key": "Project", "Value": "Crimenabi"},
-                    ],
+                BlockDeviceMappings = [{
+                    "DeviceName": "/dev/sda1",
+                    "Ebs": {
+                        "VolumeSize": 500,
+                        "VolumeType": "gp3",
+                        "DeleteOnTermination": True,
+                    },
                 }],
+                # IAM policy enforces required tags on BOTH instance AND volume
+                TagSpecifications = [
+                    {"ResourceType": "instance", "Tags": required_tags},
+                    {"ResourceType": "volume",   "Tags": required_tags},
+                ],
             )
         except ec2.exceptions.ClientError as e:
             if "DryRunOperation" in str(e):
