@@ -19,6 +19,8 @@ reprojection error in metres.  That per-camera error is then used to:
      so well-calibrated cameras dominate the merged coordinate.
 """
 
+from __future__ import annotations
+
 import json
 import logging
 from pathlib import Path
@@ -501,6 +503,10 @@ class CrossingFuser:
                     break
 
                 # ── Fallback: spatial+temporal check ──────────────────────
+                # Different edge_ids mean different physical crossings — don't merge.
+                if row_a["edge_id"] != row_b["edge_id"]:
+                    continue
+
                 for z in zones_a:
                     if cam_b not in z.get("cameras", []):
                         continue
