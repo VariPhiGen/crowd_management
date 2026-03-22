@@ -507,157 +507,209 @@ class CrossingFuser:
 
         n = len(combined_df)
 
-        # Pre-extract hot columns as numpy arrays to avoid expensive .iloc()
-        # calls inside the inner loop.
-        # Also extract crossing_x/y for pure-numpy distance calculation.
-        ts_ns      = combined_df["timestamp"].values.astype("int64")   # ns since epoch
-        tol_ns     = int(self.timestamp_tolerance_s * 1_000_000_000)
-        track_arr  = combined_df["track_id"].values
-        cam_arr_l  = combined_df["camera_id"].tolist()                  # list for O(1) index
-        cx_arr     = combined_df["crossing_x"].values.astype("float64")
-        cy_arr     = combined_df["crossing_y"].values.astype("float64")
+        # ── Pre-extract all hot columns as numpy arrays ────────────────────
+        ts_ns     = combined_df["timestamp"].values.astype("int64")  # ns since epoch
+        tol_ns    = int(self.timestamp_tolerance_s * 1_000_000_000)
+        track_arr = combined_df["track_id"].values
+        cx_arr    = combined_df["crossing_x"].values.astype("float64")
+        cy_arr    = combined_df["crossing_y"].values.astype("float64")
+        cam_arr   = combined_df["camera_id"].values                   # numpy string array
 
-        # Pre-compute which events are in AT LEAST ONE overlap zone.
-        # Events outside every zone can never be fused — skip them in the
-        # outer loop entirely, shrinking the loop from 6M to only zone events.
-        import functools, operator
-        valid_zone_masks = [m for m in zone_membership.values() if m is not None]
-        if valid_zone_masks:
-            in_any_zone = functools.reduce(operator.or_, valid_zone_masks)
-        else:
-            in_any_zone = np.zeros(n, dtype=bool)
-
-        zone_event_indices = np.where(in_any_zone)[0]
-        logger.info(
-            "Zone pre-filter: %d / %d events are inside an overlap zone (%.1f%%)",
-            len(zone_event_indices), n, len(zone_event_indices) * 100.0 / max(n, 1),
-        )
-
-        logger.info("Starting fusion event loop over %d zone events …",
-                    len(zone_event_indices))
-        _log_every = max(len(zone_event_indices) // 20, 10_000)
-
-        # Force-flush logging handlers so nohup log shows real-time progress
+        # ── Force-flush logging so nohup log shows progress in real-time ──
         _handlers = logging.getLogger().handlers + logger.handlers
         def _flush_log() -> None:
             for h in _handlers:
                 h.flush()
 
-        _flush_log()   # flush the zone pre-filter stats immediately
+        # ── Zone pre-filter ────────────────────────────────────────────────
+        import functools, operator, random as _random
+        valid_zone_masks = [m for m in zone_membership.values() if m is not None]
+        in_any_zone = (functools.reduce(operator.or_, valid_zone_masks)
+                       if valid_zone_masks else np.zeros(n, dtype=bool))
+        logger.info(
+            "Zone pre-filter: %d / %d events inside an overlap zone (%.1f%%)",
+            int(in_any_zone.sum()), n, in_any_zone.sum() * 100.0 / max(n, 1),
+        )
+        _flush_log()
 
-        n_zone = len(zone_event_indices)
-        for _loop_pos, idx_a in enumerate(zone_event_indices):
-            if _loop_pos % _log_every == 0:
-                logger.info("  Fusion progress: %d / %d zone events  (%.0f%%)",
-                            _loop_pos, n_zone, _loop_pos * 100.0 / max(n_zone, 1))
-                _flush_log()
+        # ── Identify active camera pairs (those with data) ─────────────────
+        present_cams = set(combined_df["camera_id"].unique())
+        active_pairs = [
+            (ca, cb, z)
+            for z in self.overlap_zones
+            for i, ca in enumerate(z.get("cameras", []))
+            for j, cb in enumerate(z.get("cameras", []))
+            if i < j and ca in present_cams and cb in present_cams
+        ]
+        logger.info("Active camera pairs: %s",
+                    [(ca, cb, z["id"]) for ca, cb, z in active_pairs])
+        _flush_log()
 
-            if idx_a in matched_indices:
+        # ── VECTORISED MATCHING: per camera-pair, binary-search sliding window
+        #
+        # For each camera pair (ca, cb) in each overlap zone:
+        #   1. Extract zone events for ca (n_a events) and cb (n_b events)
+        #      as plain numpy arrays — NO pandas .iloc in the hot loop.
+        #   2. Both arrays are already sorted by timestamp (combined_df sorted).
+        #   3. For each ca event i_a:
+        #        • Use searchsorted to find cb events in [t_a, t_a+tol] → O(log n_b)
+        #        • Vectorised numpy distance to all window cb events → O(window_size)
+        #        • Trajectory pre-match check → O(window_size) Python
+        #        • Greedy nearest-neighbour assignment
+        #
+        # Complexity: O(n_a × (log n_b + W)) where W ≈ 5 events/camera/second.
+        # For n_a=2M and W=5: ~10M operations vs 4.8M×48=230M in the old loop.
+        # ─────────────────────────────────────────────────────────────────────
+
+        for pair_idx, (ca, cb, zone) in enumerate(active_pairs):
+            logger.info("── Camera pair %d/%d: %s ↔ %s (zone: %s) ──",
+                        pair_idx + 1, len(active_pairs), ca, cb, zone["id"])
+            _flush_log()
+
+            # Build per-camera zone index arrays (in combined_df positions)
+            ca_zone_mask = in_any_zone & (cam_arr == ca)
+            cb_zone_mask = in_any_zone & (cam_arr == cb)
+            ca_idx = np.where(ca_zone_mask)[0]   # positions in combined_df
+            cb_idx = np.where(cb_zone_mask)[0]
+
+            if len(ca_idx) == 0 or len(cb_idx) == 0:
+                logger.info("  Skipping — no zone events for one or both cameras.")
                 continue
 
-            cam_a   = cam_arr_l[idx_a]
-            zones_a = get_valid_zones(idx_a, cam_a)
+            logger.info("  %s: %d zone events | %s: %d zone events",
+                        ca, len(ca_idx), cb, len(cb_idx))
+            _flush_log()
 
-            if not zones_a:
-                continue  # not in any overlap zone → can't fuse
+            # Pre-extract numeric arrays (no pandas overhead in hot loop)
+            ts_a   = ts_ns[ca_idx];   ts_b   = ts_ns[cb_idx]
+            cx_a   = cx_arr[ca_idx];  cy_a   = cy_arr[ca_idx]
+            cx_b   = cx_arr[cb_idx];  cy_b   = cy_arr[cb_idx]
+            tid_a  = track_arr[ca_idx].astype("int64")
+            tid_b  = track_arr[cb_idx].astype("int64")
 
-            t_a_ns = ts_ns[idx_a]
-            x_a    = cx_arr[idx_a]
-            y_a    = cy_arr[idx_a]
-            row_a  = combined_df.iloc[idx_a]   # only fetched when actually in a zone
-            candidates = []
+            # Matched flags (indexed in local ca/cb arrays)
+            a_matched = np.zeros(len(ca_idx), dtype=bool)
+            b_matched = np.zeros(len(cb_idx), dtype=bool)
 
-            # Scan forward in time only (data is sorted by timestamp).
-            # Delay all expensive operations (.iloc) until we know the
-            # candidate is worth evaluating.
-            for idx_b in range(idx_a + 1, n):
-                if ts_ns[idx_b] - t_a_ns > tol_ns:
-                    break   # all further events are also out of window
+            # Trajectory identity map for this zone/pair
+            tmap = (identity_maps.get(zone["id"], {}).get((ca, cb))
+                    or identity_maps.get(zone["id"], {}).get((cb, ca))
+                    or {})
 
-                if idx_b in matched_indices:
+            base_thresh = (self.distance_threshold_override_m
+                           if self.distance_threshold_override_m is not None
+                           else zone.get("distance_threshold_m", 1.0))
+            dyn_thresh = self._dynamic_threshold(base_thresh, ca, cb)
+
+            _log_every_a = max(len(ca_idx) // 20, 10_000)
+            n_pair_fused = 0
+
+            for i_a in range(len(ca_idx)):
+                if i_a % _log_every_a == 0:
+                    logger.info("  Progress %s→%s: %d / %d  (%.0f%%)  fused so far: %d",
+                                ca, cb, i_a, len(ca_idx),
+                                i_a * 100.0 / len(ca_idx), n_pair_fused)
+                    _flush_log()
+
+                if a_matched[i_a]:
                     continue
 
-                cam_b = cam_arr_l[idx_b]
-                if cam_a == cam_b:
+                t_a = ts_a[i_a]
+                # Symmetric window: [t_a - tol/2, t_a + tol/2] catches both
+                # earlier and later events from the other camera
+                half_tol = tol_ns // 2
+                b_lo = int(np.searchsorted(ts_b, t_a - half_tol, side="left"))
+                b_hi = int(np.searchsorted(ts_b, t_a + half_tol, side="right"))
+
+                if b_lo >= b_hi:
                     continue
 
-                # ── Trajectory pre-match (uses only cheap array lookups) ──
-                traj_partner = get_trajectory_partner(
-                    cam_a, int(track_arr[idx_a]),
-                    cam_b, zones_a,
-                )
-                if traj_partner is not None and int(track_arr[idx_b]) == traj_partner:
-                    row_b = combined_df.iloc[idx_b]   # fetch only on trajectory hit
-                    candidates.append((idx_b, 0.0, row_b))
-                    break
+                # Vectorised distances to window
+                dx    = cx_b[b_lo:b_hi] - cx_a[i_a]
+                dy    = cy_b[b_lo:b_hi] - cy_a[i_a]
+                dists = (dx * dx + dy * dy) ** 0.5
 
-                # ── Fallback: check zone membership BEFORE fetching row ───
-                matching_zones = [
-                    z for z in zones_a
-                    if cam_b in z.get("cameras", [])
-                    and zone_membership.get(z["id"]) is not None
-                    and zone_membership[z["id"]][idx_b]
-                ]
-                if not matching_zones:
-                    continue   # point_b not in any shared zone — skip .iloc
+                # Mask already-matched B events
+                b_window_matched = b_matched[b_lo:b_hi]
+                dists[b_window_matched] = np.inf
 
-                # Compute Euclidean distance via numpy (no Shapely Point needed)
-                dx   = cx_arr[idx_b] - x_a
-                dy   = cy_arr[idx_b] - y_a
-                dist = (dx * dx + dy * dy) ** 0.5
+                if np.all(np.isinf(dists)):
+                    continue
 
-                for z in matching_zones:
-                    base_thresh = (self.distance_threshold_override_m
-                                   if self.distance_threshold_override_m is not None
-                                   else z.get("distance_threshold_m", 1.0))
-                    dyn_thresh  = self._dynamic_threshold(base_thresh, cam_a, cam_b)
+                # ── 1. Trajectory-confirmed match (strongest signal) ──────
+                partner_tid = tmap.get(int(tid_a[i_a]))
+                best_j = -1
+                best_dist = np.inf
+                if partner_tid is not None:
+                    for k_off in range(b_hi - b_lo):
+                        if b_matched[b_lo + k_off]:
+                            continue
+                        if int(tid_b[b_lo + k_off]) == partner_tid:
+                            best_j = k_off
+                            best_dist = 0.0   # trajectory match overrides distance
+                            break
 
-                    if dist <= dyn_thresh:
-                        row_b = combined_df.iloc[idx_b]
-                        candidates.append((idx_b, dist, row_b))
-                        break
+                # ── 2. Spatial fallback (nearest within threshold) ────────
+                if best_j < 0:
+                    min_j = int(np.argmin(dists))
+                    if dists[min_j] <= dyn_thresh:
+                        best_j    = min_j
+                        best_dist = float(dists[min_j])
 
-            if candidates:
-                candidates.sort(key=lambda x: x[1])
-                best_idx, best_dist, row_b = candidates[0]
+                if best_j < 0:
+                    continue   # no match found for this ca event
 
-                matched_indices.add(idx_a)
-                matched_indices.add(best_idx)
+                # ── Record the fused pair ─────────────────────────────────
+                b_abs = b_lo + best_j
+                a_matched[i_a]   = True
+                b_matched[b_abs] = True
+                matched_indices.add(int(ca_idx[i_a]))
+                matched_indices.add(int(cb_idx[b_abs]))
 
-                cam_b = row_b["camera_id"]
+                gpid = _link_gpid(ca, int(tid_a[i_a]), cb, int(tid_b[b_abs]))
 
-                # Assign one shared global_person_id to both camera-local IDs
-                gpid = _link_gpid(cam_a, row_a["track_id"], cam_b, row_b["track_id"])
-
-                # Inverse-variance weighted position
                 fused_x, fused_y = self._weighted_fuse_xy(
-                    row_a["crossing_x"], row_a["crossing_y"], cam_a,
-                    row_b["crossing_x"], row_b["crossing_y"], cam_b,
+                    float(cx_a[i_a]), float(cy_a[i_a]), ca,
+                    float(cx_b[b_abs]), float(cy_b[b_abs]), cb,
                 )
 
-                import random
-                best_edge_id = random.choice([row_a["edge_id"], row_b["edge_id"]])
-
+                # Fetch row metadata only for the final record (not in hot loop)
+                row_a = combined_df.iloc[int(ca_idx[i_a])]
+                row_b = combined_df.iloc[int(cb_idx[b_abs])]
                 fused_records.append({
                     "timestamp":        min(row_a["timestamp"], row_b["timestamp"]),
                     "global_person_id": gpid,
-                    "track_id":         row_a["track_id"],
+                    "track_id":         int(tid_a[i_a]),
                     "class_name":       row_a["class_name"],
-                    "edge_id":          best_edge_id,
+                    "edge_id":          _random.choice([row_a["edge_id"],
+                                                        row_b["edge_id"]]),
                     "direction":        row_a["direction"],
-                    "crossing_x":       fused_x,
-                    "crossing_y":       fused_y,
-                    "camera_id":        f"fused:{cam_a}+{cam_b}",
+                    "crossing_x":       round(fused_x, 4),
+                    "crossing_y":       round(fused_y, 4),
+                    "camera_id":        f"fused:{ca}+{cb}",
                 })
+                n_pair_fused += 1
 
-        # Add unmatched records, assigning each a unique global_person_id
-        for i in range(len(combined_df)):
-            if i not in matched_indices:
-                row  = combined_df.iloc[i]
-                gpid = _get_or_create_gpid(str(row["camera_id"]), row["track_id"])
-                rec  = row.to_dict()
-                rec["global_person_id"] = gpid
-                fused_records.append(rec)
+            logger.info("  Pair %s↔%s done: %d events fused.", ca, cb, n_pair_fused)
+            _flush_log()
+
+        # ── Assign global person IDs to every unmatched event (vectorised) ──
+        logger.info("Assigning global person IDs to unmatched events …")
+        _flush_log()
+
+        unmatched_mask = np.ones(n, dtype=bool)
+        for idx in matched_indices:
+            unmatched_mask[idx] = False
+
+        unmatched_df = combined_df[unmatched_mask].copy()
+        unmatched_df["global_person_id"] = [
+            _get_or_create_gpid(str(cam), int(tid))
+            for cam, tid in zip(
+                unmatched_df["camera_id"].tolist(),
+                unmatched_df["track_id"].tolist(),
+            )
+        ]
+        fused_records.extend(unmatched_df.to_dict("records"))
 
         fused_df = pd.DataFrame(fused_records)
         if not fused_df.empty:
