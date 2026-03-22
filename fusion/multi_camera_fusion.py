@@ -508,9 +508,8 @@ class CrossingFuser:
         n = len(combined_df)
 
         # Pre-extract hot columns as numpy arrays to avoid expensive .iloc()
-        # calls inside the inner loop (6M+ iterations).
-        # Also extract crossing_x/y for pure-numpy distance calculation so we
-        # never have to allocate a 6M-element Shapely Point list.
+        # calls inside the inner loop.
+        # Also extract crossing_x/y for pure-numpy distance calculation.
         ts_ns      = combined_df["timestamp"].values.astype("int64")   # ns since epoch
         tol_ns     = int(self.timestamp_tolerance_s * 1_000_000_000)
         track_arr  = combined_df["track_id"].values
@@ -518,18 +517,39 @@ class CrossingFuser:
         cx_arr     = combined_df["crossing_x"].values.astype("float64")
         cy_arr     = combined_df["crossing_y"].values.astype("float64")
 
-        logger.info("Starting fusion event loop over %d events …", n)
-        _log_every = max(n // 20, 100_000)   # log progress ~20 times
+        # Pre-compute which events are in AT LEAST ONE overlap zone.
+        # Events outside every zone can never be fused — skip them in the
+        # outer loop entirely, shrinking the loop from 6M to only zone events.
+        import functools, operator
+        valid_zone_masks = [m for m in zone_membership.values() if m is not None]
+        if valid_zone_masks:
+            in_any_zone = functools.reduce(operator.or_, valid_zone_masks)
+        else:
+            in_any_zone = np.zeros(n, dtype=bool)
+
+        zone_event_indices = np.where(in_any_zone)[0]
+        logger.info(
+            "Zone pre-filter: %d / %d events are inside an overlap zone (%.1f%%)",
+            len(zone_event_indices), n, len(zone_event_indices) * 100.0 / max(n, 1),
+        )
+
+        logger.info("Starting fusion event loop over %d zone events …",
+                    len(zone_event_indices))
+        _log_every = max(len(zone_event_indices) // 20, 10_000)
+
         # Force-flush logging handlers so nohup log shows real-time progress
         _handlers = logging.getLogger().handlers + logger.handlers
         def _flush_log() -> None:
             for h in _handlers:
                 h.flush()
 
-        for idx_a in range(n):
-            if idx_a % _log_every == 0:
-                logger.info("  Fusion progress: %d / %d  (%.0f%%)",
-                            idx_a, n, idx_a * 100.0 / n)
+        _flush_log()   # flush the zone pre-filter stats immediately
+
+        n_zone = len(zone_event_indices)
+        for _loop_pos, idx_a in enumerate(zone_event_indices):
+            if _loop_pos % _log_every == 0:
+                logger.info("  Fusion progress: %d / %d zone events  (%.0f%%)",
+                            _loop_pos, n_zone, _loop_pos * 100.0 / max(n_zone, 1))
                 _flush_log()
 
             if idx_a in matched_indices:
