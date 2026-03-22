@@ -29,6 +29,7 @@ from typing import List, Dict, Any, Optional
 import numpy as np
 import pandas as pd
 from scipy.optimize import linear_sum_assignment
+from scipy.spatial import cKDTree
 from shapely.geometry import Point, Polygon
 
 logger = logging.getLogger(__name__)
@@ -260,29 +261,56 @@ class CrossingFuser:
         if not ids_a or not ids_b:
             return {}
 
-        # Build cost matrix (Euclidean distance between centroids)
+        # Build cost matrix (Euclidean distance between centroids).
+        # Use a KD-tree to pre-filter candidates within the distance threshold
+        # to avoid an O(N*M) memory allocation when N/M are large.
         arr_a = cent_a.values                         # shape (na, 2)
         arr_b = cent_b.values                         # shape (nb, 2)
-        cost = np.sqrt(
-            ((arr_a[:, None, :] - arr_b[None, :, :]) ** 2).sum(axis=2)
-        )                                             # shape (na, nb)
 
-        row_idx, col_idx = linear_sum_assignment(cost)
-
-        # Accept pairs within the dynamic distance threshold
-        # (UI override takes precedence over per-zone config value)
         base_d = (self.distance_threshold_override_m
                   if self.distance_threshold_override_m is not None
                   else zone.get("distance_threshold_m", 1.0))
         dyn_thresh = self._dynamic_threshold(base_d, cam_a, cam_b)
 
+        tree_b = cKDTree(arr_b)
+        nearby = tree_b.query_ball_point(arr_a, r=dyn_thresh)
+
+        cand_a_idx = sorted({i for i, nb in enumerate(nearby) if nb})
+        cand_b_idx = sorted({j for nb in nearby for j in nb})
+
+        if not cand_a_idx or not cand_b_idx:
+            logger.info(
+                "No track centroids within %.2f m across %s/%s — zero identity matches.",
+                dyn_thresh, cam_a, cam_b,
+            )
+            return {}
+
+        sub_a = arr_a[cand_a_idx]            # shape (n_cand_a, 2)
+        sub_b = arr_b[cand_b_idx]            # shape (n_cand_b, 2)
+
+        logger.debug(
+            "Track identity: %d/%d A-tracks and %d/%d B-tracks are candidate pairs.",
+            len(cand_a_idx), len(ids_a), len(cand_b_idx), len(ids_b),
+        )
+
+        cost = np.sqrt(
+            ((sub_a[:, None, :] - sub_b[None, :, :]) ** 2).sum(axis=2)
+        )                                             # shape (n_cand_a, n_cand_b)
+
+        row_idx, col_idx = linear_sum_assignment(cost)
+
+        # Accept pairs within the dynamic distance threshold.
+        # r and c index into cand_a_idx / cand_b_idx respectively, so
+        # translate back to the original ids_a / ids_b positions.
         identity_map: Dict[int, int] = {}
         for r, c in zip(row_idx, col_idx):
             if cost[r, c] <= dyn_thresh:
-                identity_map[int(ids_a[r])] = int(ids_b[c])
+                orig_a = cand_a_idx[r]
+                orig_b = cand_b_idx[c]
+                identity_map[int(ids_a[orig_a])] = int(ids_b[orig_b])
                 logger.debug(
                     "Trajectory match: %s.track_%d ↔ %s.track_%d  dist=%.2f m",
-                    cam_a, ids_a[r], cam_b, ids_b[c], cost[r, c],
+                    cam_a, ids_a[orig_a], cam_b, ids_b[orig_b], cost[r, c],
                 )
 
         logger.info(
