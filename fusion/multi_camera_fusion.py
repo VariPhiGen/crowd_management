@@ -535,7 +535,9 @@ class CrossingFuser:
             pt_a    = points[idx_a]
             candidates = []
 
-            # Scan forward in time only (data is sorted by timestamp)
+            # Scan forward in time only (data is sorted by timestamp).
+            # Delay all expensive operations (.iloc, Point.distance) until we
+            # know the candidate is worth evaluating.
             for idx_b in range(idx_a + 1, n):
                 if ts_ns[idx_b] - t_a_ns > tol_ns:
                     break   # all further events are also out of window
@@ -547,26 +549,31 @@ class CrossingFuser:
                 if cam_a == cam_b:
                     continue
 
-                row_b = combined_df.iloc[idx_b]
-                pt_b  = points[idx_b]
-
-                # ── Trajectory pre-match check ────────────────────────────
+                # ── Trajectory pre-match (uses only cheap array lookups) ──
                 traj_partner = get_trajectory_partner(
                     cam_a, int(track_arr[idx_a]),
                     cam_b, zones_a,
                 )
                 if traj_partner is not None and int(track_arr[idx_b]) == traj_partner:
-                    candidates.append((idx_b, 0.0, row_b))   # dist=0: forced match
+                    row_b = combined_df.iloc[idx_b]   # fetch only on trajectory hit
+                    candidates.append((idx_b, 0.0, row_b))
                     break
 
-                # ── Fallback: spatial+temporal check ──────────────────────
-                for z in zones_a:
-                    if cam_b not in z.get("cameras", []):
-                        continue
-                    if zone_membership.get(z["id"]) is None or \
-                       not zone_membership[z["id"]][idx_b]:
-                        continue
+                # ── Fallback: check zone membership BEFORE fetching row ───
+                matching_zones = [
+                    z for z in zones_a
+                    if cam_b in z.get("cameras", [])
+                    and zone_membership.get(z["id"]) is not None
+                    and zone_membership[z["id"]][idx_b]
+                ]
+                if not matching_zones:
+                    continue   # point_b not in any shared zone — skip .iloc
 
+                # Now safe to fetch the row and compute spatial distance
+                row_b = combined_df.iloc[idx_b]
+                pt_b  = points[idx_b]
+
+                for z in matching_zones:
                     base_thresh = (self.distance_threshold_override_m
                                    if self.distance_threshold_override_m is not None
                                    else z.get("distance_threshold_m", 1.0))
