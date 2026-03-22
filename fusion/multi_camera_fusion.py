@@ -398,6 +398,7 @@ class CrossingFuser:
 
         # Build one identity map per (zone, camera-pair)
         # identity_maps: dict[zone_id] -> dict[(cam_a, cam_b)] -> {track_a: track_b}
+        logger.info("Step 1: building track identity maps …")
         identity_maps: Dict[str, Any] = {}
         cam_ids_sorted = sorted(unique_cams)
         for z in self.overlap_zones:
@@ -407,8 +408,10 @@ class CrossingFuser:
             for i in range(len(zone_cams)):
                 for j in range(i + 1, len(zone_cams)):
                     ca, cb = zone_cams[i], zone_cams[j]
+                    logger.info("  Building track map %s ↔ %s (zone: %s) …", ca, cb, zid)
                     tmap = self._build_track_identity_map(ca, cb, z, output_dir)
                     identity_maps[zid][(ca, cb)] = tmap
+        logger.info("Step 1 done. Starting Step 2: zone membership precompute …")
 
         def get_trajectory_partner(
             cam_a: str, track_a: int,
@@ -503,44 +506,56 @@ class CrossingFuser:
 
         n = len(combined_df)
 
+        # Pre-extract hot columns as numpy arrays to avoid expensive .iloc()
+        # calls inside the inner loop (6M+ iterations).
+        ts_ns      = combined_df["timestamp"].values.astype("int64")   # ns since epoch
+        tol_ns     = int(self.timestamp_tolerance_s * 1_000_000_000)
+        track_arr  = combined_df["track_id"].values
+        cam_arr_l  = combined_df["camera_id"].tolist()                  # list for O(1) index
+
+        logger.info("Starting fusion event loop over %d events …", n)
+        _log_every = max(n // 20, 100_000)   # log progress ~20 times
+
         for idx_a in range(n):
+            if idx_a % _log_every == 0:
+                logger.info("  Fusion progress: %d / %d  (%.0f%%)",
+                            idx_a, n, idx_a * 100.0 / n)
+
             if idx_a in matched_indices:
                 continue
 
-            row_a   = combined_df.iloc[idx_a]
-            t_a     = row_a["timestamp"]
-            pt_a    = points[idx_a]
-            cam_a   = row_a["camera_id"]
+            cam_a   = cam_arr_l[idx_a]
             zones_a = get_valid_zones(idx_a, cam_a)
 
             if not zones_a:
                 continue  # not in any overlap zone → can't fuse
 
+            t_a_ns  = ts_ns[idx_a]
+            row_a   = combined_df.iloc[idx_a]   # only fetched when actually in a zone
+            pt_a    = points[idx_a]
             candidates = []
 
             # Scan forward in time only (data is sorted by timestamp)
             for idx_b in range(idx_a + 1, n):
+                if ts_ns[idx_b] - t_a_ns > tol_ns:
+                    break   # all further events are also out of window
+
                 if idx_b in matched_indices:
                     continue
 
-                row_b     = combined_df.iloc[idx_b]
-                time_diff = (row_b["timestamp"] - t_a).total_seconds()
-
-                if time_diff > self.timestamp_tolerance_s:
-                    break   # all further events are also out of window
-
-                cam_b = row_b["camera_id"]
+                cam_b = cam_arr_l[idx_b]
                 if cam_a == cam_b:
                     continue
 
-                pt_b = points[idx_b]
+                row_b = combined_df.iloc[idx_b]
+                pt_b  = points[idx_b]
 
                 # ── Trajectory pre-match check ────────────────────────────
                 traj_partner = get_trajectory_partner(
-                    cam_a, int(row_a["track_id"]),
+                    cam_a, int(track_arr[idx_a]),
                     cam_b, zones_a,
                 )
-                if traj_partner is not None and int(row_b["track_id"]) == traj_partner:
+                if traj_partner is not None and int(track_arr[idx_b]) == traj_partner:
                     candidates.append((idx_b, 0.0, row_b))   # dist=0: forced match
                     break
 
@@ -548,7 +563,8 @@ class CrossingFuser:
                 for z in zones_a:
                     if cam_b not in z.get("cameras", []):
                         continue
-                    if z["shapely_poly"] is None or not z["shapely_poly"].contains(pt_b):
+                    if zone_membership.get(z["id"]) is None or \
+                       not zone_membership[z["id"]][idx_b]:
                         continue
 
                     base_thresh = (self.distance_threshold_override_m
