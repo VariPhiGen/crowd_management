@@ -509,10 +509,14 @@ class CrossingFuser:
 
         # Pre-extract hot columns as numpy arrays to avoid expensive .iloc()
         # calls inside the inner loop (6M+ iterations).
+        # Also extract crossing_x/y for pure-numpy distance calculation so we
+        # never have to allocate a 6M-element Shapely Point list.
         ts_ns      = combined_df["timestamp"].values.astype("int64")   # ns since epoch
         tol_ns     = int(self.timestamp_tolerance_s * 1_000_000_000)
         track_arr  = combined_df["track_id"].values
         cam_arr_l  = combined_df["camera_id"].tolist()                  # list for O(1) index
+        cx_arr     = combined_df["crossing_x"].values.astype("float64")
+        cy_arr     = combined_df["crossing_y"].values.astype("float64")
 
         logger.info("Starting fusion event loop over %d events …", n)
         _log_every = max(n // 20, 100_000)   # log progress ~20 times
@@ -531,14 +535,15 @@ class CrossingFuser:
             if not zones_a:
                 continue  # not in any overlap zone → can't fuse
 
-            t_a_ns  = ts_ns[idx_a]
-            row_a   = combined_df.iloc[idx_a]   # only fetched when actually in a zone
-            pt_a    = points[idx_a]
+            t_a_ns = ts_ns[idx_a]
+            x_a    = cx_arr[idx_a]
+            y_a    = cy_arr[idx_a]
+            row_a  = combined_df.iloc[idx_a]   # only fetched when actually in a zone
             candidates = []
 
             # Scan forward in time only (data is sorted by timestamp).
-            # Delay all expensive operations (.iloc, Point.distance) until we
-            # know the candidate is worth evaluating.
+            # Delay all expensive operations (.iloc) until we know the
+            # candidate is worth evaluating.
             for idx_b in range(idx_a + 1, n):
                 if ts_ns[idx_b] - t_a_ns > tol_ns:
                     break   # all further events are also out of window
@@ -570,18 +575,19 @@ class CrossingFuser:
                 if not matching_zones:
                     continue   # point_b not in any shared zone — skip .iloc
 
-                # Now safe to fetch the row and compute spatial distance
-                row_b = combined_df.iloc[idx_b]
-                pt_b  = points[idx_b]
+                # Compute Euclidean distance via numpy (no Shapely Point needed)
+                dx   = cx_arr[idx_b] - x_a
+                dy   = cy_arr[idx_b] - y_a
+                dist = (dx * dx + dy * dy) ** 0.5
 
                 for z in matching_zones:
                     base_thresh = (self.distance_threshold_override_m
                                    if self.distance_threshold_override_m is not None
                                    else z.get("distance_threshold_m", 1.0))
                     dyn_thresh  = self._dynamic_threshold(base_thresh, cam_a, cam_b)
-                    dist        = pt_a.distance(pt_b)
 
                     if dist <= dyn_thresh:
+                        row_b = combined_df.iloc[idx_b]
                         candidates.append((idx_b, dist, row_b))
                         break
 
