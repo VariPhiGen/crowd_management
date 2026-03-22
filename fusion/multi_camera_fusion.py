@@ -262,9 +262,21 @@ class CrossingFuser:
         if not ids_a or not ids_b:
             return {}
 
-        # Build cost matrix (Euclidean distance between centroids).
-        # Use a KD-tree to pre-filter candidates within the distance threshold
-        # to avoid an O(N*M) memory allocation when N/M are large.
+        # Greedy nearest-neighbour track matching via KD-tree.
+        #
+        # The old Hungarian (linear_sum_assignment) approach required building
+        # an N×M cost matrix which OOM-crashes for large track sets (millions
+        # of unique track IDs from a long recording).  Instead:
+        #   1. Build a KD-tree on arr_b.
+        #   2. For each A-track find its single nearest B-track (k=1)
+        #      within dyn_thresh.
+        #   3. Greedily assign closest pairs first (sort by distance).
+        #      Each B-track can only be claimed once.
+        #
+        # Greedy NN is O(N log N) and uses O(N) extra memory — safe for
+        # millions of centroids — while still finding the correct match in
+        # the vast majority of cases (two cameras tracking the same person
+        # will have very similar centroid positions).
         arr_a = cent_a.values                         # shape (na, 2)
         arr_b = cent_b.values                         # shape (nb, 2)
 
@@ -273,46 +285,35 @@ class CrossingFuser:
                   else zone.get("distance_threshold_m", 1.0))
         dyn_thresh = self._dynamic_threshold(base_d, cam_a, cam_b)
 
-        tree_b = cKDTree(arr_b)
-        nearby = tree_b.query_ball_point(arr_a, r=dyn_thresh)
-
-        cand_a_idx = sorted({i for i, nb in enumerate(nearby) if nb})
-        cand_b_idx = sorted({j for nb in nearby for j in nb})
-
-        if not cand_a_idx or not cand_b_idx:
-            logger.info(
-                "No track centroids within %.2f m across %s/%s — zero identity matches.",
-                dyn_thresh, cam_a, cam_b,
-            )
-            return {}
-
-        sub_a = arr_a[cand_a_idx]            # shape (n_cand_a, 2)
-        sub_b = arr_b[cand_b_idx]            # shape (n_cand_b, 2)
-
-        logger.debug(
-            "Track identity: %d/%d A-tracks and %d/%d B-tracks are candidate pairs.",
-            len(cand_a_idx), len(ids_a), len(cand_b_idx), len(ids_b),
+        logger.info(
+            "  Track centroids: %d for %s, %d for %s (threshold=%.2f m)",
+            len(ids_a), cam_a, len(ids_b), cam_b, dyn_thresh,
         )
 
-        cost = np.sqrt(
-            ((sub_a[:, None, :] - sub_b[None, :, :]) ** 2).sum(axis=2)
-        )                                             # shape (n_cand_a, n_cand_b)
+        tree_b = cKDTree(arr_b)
+        # k=1 → find the single nearest B-centroid for every A-centroid
+        distances, nearest_b = tree_b.query(arr_a, k=1,
+                                             distance_upper_bound=dyn_thresh)
 
-        row_idx, col_idx = linear_sum_assignment(cost)
+        # Build (distance, a_idx, b_idx) tuples for valid pairs, sort by dist
+        valid_pairs = [
+            (float(distances[i]), i, int(nearest_b[i]))
+            for i in range(len(ids_a))
+            if distances[i] <= dyn_thresh
+        ]
+        valid_pairs.sort(key=lambda x: x[0])
 
-        # Accept pairs within the dynamic distance threshold.
-        # r and c index into cand_a_idx / cand_b_idx respectively, so
-        # translate back to the original ids_a / ids_b positions.
         identity_map: Dict[int, int] = {}
-        for r, c in zip(row_idx, col_idx):
-            if cost[r, c] <= dyn_thresh:
-                orig_a = cand_a_idx[r]
-                orig_b = cand_b_idx[c]
-                identity_map[int(ids_a[orig_a])] = int(ids_b[orig_b])
-                logger.debug(
-                    "Trajectory match: %s.track_%d ↔ %s.track_%d  dist=%.2f m",
-                    cam_a, ids_a[orig_a], cam_b, ids_b[orig_b], cost[r, c],
-                )
+        used_b: set = set()
+        for dist, ia, ib in valid_pairs:
+            if ib in used_b:
+                continue
+            identity_map[int(ids_a[ia])] = int(ids_b[ib])
+            used_b.add(ib)
+            logger.debug(
+                "Trajectory match: %s.track_%d ↔ %s.track_%d  dist=%.2f m",
+                cam_a, ids_a[ia], cam_b, ids_b[ib], dist,
+            )
 
         logger.info(
             "Trajectory pre-match %s↔%s: %d/%d track pairs confirmed (threshold=%.2f m)",
