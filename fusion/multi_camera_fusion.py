@@ -520,11 +520,17 @@ class CrossingFuser:
 
         logger.info("Starting fusion event loop over %d events …", n)
         _log_every = max(n // 20, 100_000)   # log progress ~20 times
+        # Force-flush logging handlers so nohup log shows real-time progress
+        _handlers = logging.getLogger().handlers + logger.handlers
+        def _flush_log() -> None:
+            for h in _handlers:
+                h.flush()
 
         for idx_a in range(n):
             if idx_a % _log_every == 0:
                 logger.info("  Fusion progress: %d / %d  (%.0f%%)",
                             idx_a, n, idx_a * 100.0 / n)
+                _flush_log()
 
             if idx_a in matched_indices:
                 continue
