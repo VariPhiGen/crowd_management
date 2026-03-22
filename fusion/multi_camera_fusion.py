@@ -216,7 +216,7 @@ class CrossingFuser:
             return {}
 
         def _load_tracks(path: Path) -> pd.DataFrame:
-            df = pd.read_csv(path)
+            df = pd.read_csv(path, on_bad_lines="skip")
             df["timestamp"] = pd.to_datetime(df["timestamp"], format="mixed", errors="coerce")
             df["floor_x"] = pd.to_numeric(df["floor_x"], errors="coerce")
             df["floor_y"] = pd.to_numeric(df["floor_y"], errors="coerce")
@@ -311,7 +311,7 @@ class CrossingFuser:
         dfs = []
         for p in csv_paths:
             try:
-                df = pd.read_csv(p)
+                df = pd.read_csv(p, on_bad_lines="skip")
                 before = len(df)
                 df["timestamp"] = pd.to_datetime(df["timestamp"], format="mixed", errors="coerce")
                 bad_rows = df["timestamp"].isna().sum()
