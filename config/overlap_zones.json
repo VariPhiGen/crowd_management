@@ -1,35 +1,80 @@
 {
   "overlap_zones": [
     {
+      "id": "overlap_NVRCAM01_cam_1",
+      "cameras": [
+        "NVRCAM01",
+        "cam_1"
+      ],
+      "floor_polygon": [
+        [4.32, 0.86],
+        [0.2, 4.33],
+        [6.16, 25.28],
+        [8.7, 6.19]
+      ],
+      "distance_threshold_m": 2.55,
+      "buffer_margin_m": 0.5,
+      "fusion_strategy": "weighted_average"
+    },
+    {
+      "id": "overlap_NVRCAM01_cam_2",
+      "cameras": [
+        "NVRCAM01",
+        "cam_2"
+      ],
+      "floor_polygon": [
+        [3.38, -0.29],
+        [-3.09, -0.02],
+        [-3.81, 0.22],
+        [-3.86, 0.35],
+        [-5.93, 6.67],
+        [-6.97, 19.58],
+        [-3.23, 47.43],
+        [4.83, 35.29],
+        [8.47, 7.98],
+        [8.35, 5.76]
+      ],
+      "distance_threshold_m": 4.63,
+      "buffer_margin_m": 0.5,
+      "fusion_strategy": "weighted_average"
+    },
+    {
       "id": "overlap_cam_1_cam_2",
       "cameras": [
         "cam_1",
         "cam_2"
       ],
       "floor_polygon": [
-        [
-          4.72,
-          0.53
-        ],
-        [
-          0.2,
-          4.33
-        ],
-        [
-          9.08,
-          35.52
-        ],
-        [
-          9.87,
-          34.47
-        ],
-        [
-          8.19,
-          2.79
-        ]
+        [4.72, 0.53],
+        [0.2, 4.33],
+        [9.08, 35.52],
+        [9.87, 34.47],
+        [8.19, 2.79]
       ],
       "distance_threshold_m": 2.5,
       "buffer_margin_m": 0.8,
+      "fusion_strategy": "weighted_average"
+    },
+    {
+      "id": "overlap_NVRCAM01_NVRCAM02",
+      "cameras": [
+        "NVRCAM01",
+        "NVRCAM02"
+      ],
+      "floor_polygon": [
+        [3.38, -0.29],
+        [-3.09, -0.02],
+        [-3.81, 0.22],
+        [-3.86, 0.35],
+        [-5.93, 6.67],
+        [-6.97, 19.58],
+        [-3.23, 47.43],
+        [4.83, 35.29],
+        [8.47, 7.98],
+        [8.35, 5.76]
+      ],
+      "distance_threshold_m": 4.63,
+      "buffer_margin_m": 0.5,
       "fusion_strategy": "weighted_average"
     }
   ]
