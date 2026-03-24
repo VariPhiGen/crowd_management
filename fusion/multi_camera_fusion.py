@@ -39,6 +39,56 @@ logger = logging.getLogger(__name__)
 _DEFAULT_REPROJ_ERROR_M = 0.50
 
 
+class _UnionFind:
+    """Union-Find with camera-conflict prevention for multi-camera fusion."""
+    __slots__ = ("_parent", "_rank", "_cam", "_comp_cams")
+
+    def __init__(self, n: int, cam_arr):
+        self._parent = list(range(n))
+        self._rank = [0] * n
+        self._cam = cam_arr
+        self._comp_cams: Dict[int, set] = {}
+
+    def find(self, x: int) -> int:
+        while self._parent[x] != x:
+            self._parent[x] = self._parent[self._parent[x]]
+            x = self._parent[x]
+        return x
+
+    def _get_cams(self, root: int) -> set:
+        if root not in self._comp_cams:
+            self._comp_cams[root] = {str(self._cam[root])}
+        return self._comp_cams[root]
+
+    def union_safe(self, a: int, b: int) -> bool:
+        """Union a and b; returns False (skip) if it would put two events
+        from the same camera into one component."""
+        ra, rb = self.find(a), self.find(b)
+        if ra == rb:
+            return True
+        cams_a = self._get_cams(ra)
+        cams_b = self._get_cams(rb)
+        if cams_a & cams_b:
+            return False
+        if self._rank[ra] < self._rank[rb]:
+            ra, rb = rb, ra
+        self._parent[rb] = ra
+        self._comp_cams[ra] = cams_a | cams_b
+        self._comp_cams.pop(rb, None)
+        if self._rank[ra] == self._rank[rb]:
+            self._rank[ra] += 1
+        return True
+
+    def components(self) -> Dict[int, list]:
+        out: Dict[int, list] = {}
+        for i in range(len(self._parent)):
+            r = self.find(i)
+            if r not in out:
+                out[r] = []
+            out[r].append(i)
+        return out
+
+
 def _load_cam_reproj_error(cam_id: str, config_dir: str) -> float:
     """
     Load mean floor-space reprojection error (metres) from the homography
@@ -183,6 +233,28 @@ class CrossingFuser:
         fused_x = (x_a * w_a + x_b * w_b) / total
         fused_y = (y_a * w_a + y_b * w_b) / total
         return fused_x, fused_y
+
+    def _weighted_fuse_xy_multi(
+        self,
+        observations: List[tuple],
+    ) -> tuple:
+        """
+        Inverse-variance weighted average of N floor positions.
+
+        Parameters
+        ----------
+        observations : list of (x, y, camera_id)
+        """
+        total_w = 0.0
+        fused_x = 0.0
+        fused_y = 0.0
+        for x, y, cam_id in observations:
+            err = max(self._get_cam_error(cam_id), 0.01)
+            w = 1.0 / (err ** 2)
+            fused_x += x * w
+            fused_y += y * w
+            total_w += w
+        return fused_x / total_w, fused_y / total_w
 
     # ------------------------------------------------------------------
     # Trajectory-based track identity mapping
@@ -444,40 +516,9 @@ class CrossingFuser:
         #   b) Otherwise → fall back to spatial+temporal distance check
         # ─────────────────────────────────────────────────────────────────────
 
-        fused_records   = []
-        matched_indices = set()
-
-        # ── Global person ID assignment ───────────────────────────────────────
-        # ByteTrack IDs are LOCAL per camera (both cam_1 and cam_2 start at 1).
-        # Here we assign a single incremental global_person_id so that the same
-        # physical person always gets the same number regardless of which camera
-        # saw them.
-        #
-        # Rules:
-        #   • When two events from different cameras are fused (same person),
-        #     both (cam_a, local_tid_a) and (cam_b, local_tid_b) map to one
-        #     global_person_id — assigned the first time either key is seen.
-        #   • Single-camera events that never matched another camera get their
-        #     own unique global_person_id.
-        #   • IDs are assigned in chronological order of first appearance, so
-        #     they are incremental by time (person 1 appears before person 2).
-        _gpid_counter: int = 0
-        _gpid_map: Dict[tuple, int] = {}   # (camera_id, local_track_id) → global_person_id
-
-        def _get_or_create_gpid(cam: str, tid) -> int:
-            nonlocal _gpid_counter
-            key = (str(cam), int(tid))
-            if key not in _gpid_map:
-                _gpid_counter += 1
-                _gpid_map[key] = _gpid_counter
-            return _gpid_map[key]
-
-        def _link_gpid(cam_primary: str, tid_primary, cam_secondary: str, tid_secondary) -> int:
-            """Ensure both camera-local IDs share the same global person ID."""
-            gpid = _get_or_create_gpid(cam_primary, tid_primary)
-            _gpid_map[(str(cam_secondary), int(tid_secondary))] = gpid
-            return gpid
-        # ─────────────────────────────────────────────────────────────────────
+        # Collect all pairwise match pairs; union-find will cluster them
+        # across cameras (supporting 2, 3, … N cameras per person).
+        all_matches: list = []   # [(match_quality, global_idx_a, global_idx_b)]
 
         # Pre-compute zone membership for every crossing event using vectorised
         # shapely.contains_xy — avoids millions of per-row Python contain() calls.
@@ -659,57 +700,101 @@ class CrossingFuser:
                 if best_j < 0:
                     continue   # no match found for this ca event
 
-                # ── Record the fused pair ─────────────────────────────────
+                # ── Record match pair for multi-camera union-find ─────────
                 b_abs = b_lo + best_j
                 a_matched[i_a]   = True
                 b_matched[b_abs] = True
-                matched_indices.add(int(ca_idx[i_a]))
-                matched_indices.add(int(cb_idx[b_abs]))
-
-                gpid = _link_gpid(ca, int(tid_a[i_a]), cb, int(tid_b[b_abs]))
-
-                fused_x, fused_y = self._weighted_fuse_xy(
-                    float(cx_a[i_a]), float(cy_a[i_a]), ca,
-                    float(cx_b[b_abs]), float(cy_b[b_abs]), cb,
-                )
-
-                # Fetch row metadata only for the final record (not in hot loop)
-                row_a = combined_df.iloc[int(ca_idx[i_a])]
-                row_b = combined_df.iloc[int(cb_idx[b_abs])]
-                fused_records.append({
-                    "timestamp":        min(row_a["timestamp"], row_b["timestamp"]),
-                    "global_person_id": gpid,
-                    "track_id":         int(tid_a[i_a]),
-                    "class_name":       row_a["class_name"],
-                    "edge_id":          _random.choice([row_a["edge_id"],
-                                                        row_b["edge_id"]]),
-                    "direction":        row_a["direction"],
-                    "crossing_x":       round(fused_x, 4),
-                    "crossing_y":       round(fused_y, 4),
-                    "camera_id":        f"fused:{ca}+{cb}",
-                })
+                all_matches.append((best_dist, int(ca_idx[i_a]), int(cb_idx[b_abs])))
                 n_pair_fused += 1
 
             logger.info("  Pair %s↔%s done: %d events fused.", ca, cb, n_pair_fused)
             _flush_log()
 
-        # ── Assign global person IDs to every unmatched event (vectorised) ──
-        logger.info("Assigning global person IDs to unmatched events …")
+        # ── Multi-camera clustering via union-find ────────────────────────
+        logger.info(
+            "Collected %d pairwise matches. Running union-find clustering …",
+            len(all_matches),
+        )
         _flush_log()
 
-        unmatched_mask = np.ones(n, dtype=bool)
-        for idx in matched_indices:
-            unmatched_mask[idx] = False
+        all_matches.sort(key=lambda x: x[0])
+        uf = _UnionFind(n, cam_arr)
+        n_merged = 0
+        for dist, idx_a, idx_b in all_matches:
+            if uf.union_safe(idx_a, idx_b):
+                n_merged += 1
 
-        unmatched_df = combined_df[unmatched_mask].copy()
-        unmatched_df["global_person_id"] = [
+        components = uf.components()
+        multi_components = {r: m for r, m in components.items() if len(m) > 1}
+        multi_event_indices: set = set()
+        for members in multi_components.values():
+            multi_event_indices.update(members)
+
+        logger.info(
+            "Union-find: %d/%d matches accepted, %d multi-camera clusters, "
+            "%d events in clusters, %d singletons.",
+            n_merged, len(all_matches), len(multi_components),
+            len(multi_event_indices), n - len(multi_event_indices),
+        )
+        _flush_log()
+
+        # ── Global person ID assignment ──────────────────────────────────
+        _gpid_counter: int = 0
+        _gpid_map: Dict[tuple, int] = {}
+
+        def _get_or_create_gpid(cam: str, tid) -> int:
+            nonlocal _gpid_counter
+            key = (str(cam), int(tid))
+            if key not in _gpid_map:
+                _gpid_counter += 1
+                _gpid_map[key] = _gpid_counter
+            return _gpid_map[key]
+
+        # ── Build fused records from multi-camera components ─────────────
+        fused_records: list = []
+
+        for root, members in multi_components.items():
+            rows = [combined_df.iloc[idx] for idx in members]
+            cam_ids_in_cluster = sorted({str(r["camera_id"]) for r in rows})
+
+            observations = [
+                (float(r["crossing_x"]), float(r["crossing_y"]), str(r["camera_id"]))
+                for r in rows
+            ]
+            fused_x, fused_y = self._weighted_fuse_xy_multi(observations)
+
+            primary = min(rows, key=lambda r: r["timestamp"])
+            gpid = _get_or_create_gpid(str(primary["camera_id"]),
+                                       int(primary["track_id"]))
+            for r in rows:
+                _gpid_map[(str(r["camera_id"]), int(r["track_id"]))] = gpid
+
+            fused_records.append({
+                "timestamp":        min(r["timestamp"] for r in rows),
+                "global_person_id": gpid,
+                "track_id":         int(primary["track_id"]),
+                "class_name":       primary["class_name"],
+                "edge_id":          _random.choice([r["edge_id"] for r in rows]),
+                "direction":        primary["direction"],
+                "crossing_x":       round(fused_x, 4),
+                "crossing_y":       round(fused_y, 4),
+                "camera_id":        "fused:" + "+".join(cam_ids_in_cluster),
+            })
+
+        # ── Pass-through singletons (bulk — no per-row iloc) ─────────────
+        singleton_mask = np.ones(n, dtype=bool)
+        for idx in multi_event_indices:
+            singleton_mask[idx] = False
+
+        singleton_df = combined_df[singleton_mask].copy()
+        singleton_df["global_person_id"] = [
             _get_or_create_gpid(str(cam), int(tid))
             for cam, tid in zip(
-                unmatched_df["camera_id"].tolist(),
-                unmatched_df["track_id"].tolist(),
+                singleton_df["camera_id"].tolist(),
+                singleton_df["track_id"].tolist(),
             )
         ]
-        fused_records.extend(unmatched_df.to_dict("records"))
+        fused_records.extend(singleton_df.to_dict("records"))
 
         fused_df = pd.DataFrame(fused_records)
         if not fused_df.empty:
@@ -718,10 +803,12 @@ class CrossingFuser:
 
         logger.info(
             "Fusion complete. %d original events → %d fused events "
-            "(%d duplicates removed). %d unique global person IDs assigned.",
+            "(%d duplicates removed, %d multi-cam clusters). "
+            "%d unique global person IDs assigned.",
             len(combined_df),
             len(fused_df),
             len(combined_df) - len(fused_df),
+            len(multi_components),
             _gpid_counter,
         )
         return fused_df

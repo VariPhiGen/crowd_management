@@ -383,6 +383,103 @@ def test_foot_estimator_no_occlusion():
         assert abs(est.foot_y - det.bbox[3]) < 0.5, f"foot_y should match raw y2 for person {i}"
 
 
+def test_fusion_three_cameras(tmp_path):
+    """Three cameras see the same person at similar time/position → one fused record."""
+    overlap_cfg_path = tmp_path / "overlap_zones.json"
+    mock_overlap = {
+        "overlap_zones": [
+            {
+                "id": "zone_ABC",
+                "cameras": ["camA", "camB", "camC"],
+                "floor_polygon": [[0, 0], [10, 0], [10, 10], [0, 10]],
+                "distance_threshold_m": 0.5,
+            }
+        ]
+    }
+    with open(overlap_cfg_path, "w") as f:
+        json.dump(mock_overlap, f)
+
+    csv_a = tmp_path / "camA_crossings.csv"
+    csv_b = tmp_path / "camB_crossings.csv"
+    csv_c = tmp_path / "camC_crossings.csv"
+
+    create_mock_crossings_csv([{
+        "timestamp": "2025-03-14 10:00:01",
+        "track_id": 1, "edge_id": "E1",
+        "crossing_x": 3.0, "crossing_y": 5.0, "camera_id": "camA",
+    }], csv_a)
+    create_mock_crossings_csv([{
+        "timestamp": "2025-03-14 10:00:01.3",
+        "track_id": 2, "edge_id": "E1",
+        "crossing_x": 3.1, "crossing_y": 5.1, "camera_id": "camB",
+    }], csv_b)
+    create_mock_crossings_csv([{
+        "timestamp": "2025-03-14 10:00:01.5",
+        "track_id": 3, "edge_id": "E1",
+        "crossing_x": 3.05, "crossing_y": 5.05, "camera_id": "camC",
+    }], csv_c)
+
+    fuser = CrossingFuser(str(overlap_cfg_path), timestamp_tolerance_s=1.0)
+    df = fuser.fuse([str(csv_a), str(csv_b), str(csv_c)])
+
+    assert len(df) == 1, f"Expected 1 fused record, got {len(df)}"
+    row = df.iloc[0]
+
+    assert "camA" in row["camera_id"]
+    assert "camB" in row["camera_id"]
+    assert "camC" in row["camera_id"]
+    assert row["timestamp"].to_pydatetime() == datetime(2025, 3, 14, 10, 0, 1)
+
+
+def test_fusion_three_cameras_two_people(tmp_path):
+    """Three cameras, two distinct people → two fused records (no false merge)."""
+    overlap_cfg_path = tmp_path / "overlap_zones.json"
+    mock_overlap = {
+        "overlap_zones": [
+            {
+                "id": "zone_ABC",
+                "cameras": ["camA", "camB", "camC"],
+                "floor_polygon": [[0, 0], [20, 0], [20, 20], [0, 20]],
+                "distance_threshold_m": 1.0,
+            }
+        ]
+    }
+    with open(overlap_cfg_path, "w") as f:
+        json.dump(mock_overlap, f)
+
+    csv_a = tmp_path / "camA_crossings.csv"
+    csv_b = tmp_path / "camB_crossings.csv"
+    csv_c = tmp_path / "camC_crossings.csv"
+
+    # Person 1: near (3, 5) seen by camA and camB
+    # Person 2: near (15, 15) seen by camA and camC
+    create_mock_crossings_csv([
+        {"timestamp": "2025-03-14 10:00:01", "track_id": 1, "edge_id": "E1",
+         "crossing_x": 3.0, "crossing_y": 5.0, "camera_id": "camA"},
+        {"timestamp": "2025-03-14 10:00:01", "track_id": 2, "edge_id": "E2",
+         "crossing_x": 15.0, "crossing_y": 15.0, "camera_id": "camA"},
+    ], csv_a)
+    create_mock_crossings_csv([
+        {"timestamp": "2025-03-14 10:00:01.2", "track_id": 5, "edge_id": "E1",
+         "crossing_x": 3.1, "crossing_y": 5.1, "camera_id": "camB"},
+    ], csv_b)
+    create_mock_crossings_csv([
+        {"timestamp": "2025-03-14 10:00:01.3", "track_id": 7, "edge_id": "E2",
+         "crossing_x": 15.1, "crossing_y": 15.1, "camera_id": "camC"},
+    ], csv_c)
+
+    fuser = CrossingFuser(str(overlap_cfg_path), timestamp_tolerance_s=1.0)
+    df = fuser.fuse([str(csv_a), str(csv_b), str(csv_c)])
+
+    assert len(df) == 2, f"Expected 2 fused records (2 people), got {len(df)}"
+
+    fused_rows = df[df["camera_id"].str.startswith("fused:")]
+    assert len(fused_rows) == 2, "Both people should be fused across cameras"
+
+    gpids = df["global_person_id"].unique()
+    assert len(gpids) == 2, "Two distinct people should have different global IDs"
+
+
 def test_visibility_weighted_merge_auto():
     """
     In the overlap zone fuser, the camera whose foot was clearly seen

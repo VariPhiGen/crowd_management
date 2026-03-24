@@ -190,8 +190,18 @@ def auto_configure(silent: bool = False) -> bool:
     with open(FLOOR_CFG, "w") as f:
         json.dump(floor_cfg, f, indent=2)
 
-    # ── Pairwise overlap zones from polygon intersection ──────────────────
-    # Load existing zones to preserve their thresholds
+    # ── Multi-camera overlap zones from coverage polygon intersection ────
+    #
+    # Instead of generating one zone per camera *pair*, we find maximal
+    # cliques of cameras whose coverage polygons mutually overlap.  A zone
+    # listing [A, B, C] lets the fusion engine match crossing events across
+    # all three cameras in one pass (via union-find).
+    #
+    # Fallback: if the N-way intersection for a clique is too small, the
+    # clique's pairs still get individual pairwise zones.
+
+    from itertools import combinations
+
     existing: dict[str, dict] = {}
     if OVERLAP_CFG.exists():
         with open(OVERLAP_CFG) as f:
@@ -200,40 +210,92 @@ def auto_configure(silent: bool = False) -> bool:
             existing[z["id"]] = z
 
     cam_ids = sorted(cam_polygons.keys())
-    new_zones: list[dict] = []
 
+    # Build pairwise overlap adjacency + cache intersection polygons
+    adj: dict[str, set] = {c: set() for c in cam_ids}
+    pair_inter: dict[tuple, "Polygon"] = {}
     for i in range(len(cam_ids)):
         for j in range(i + 1, len(cam_ids)):
-            id_a, id_b  = cam_ids[i], cam_ids[j]
-            intersection = cam_polygons[id_a].intersection(cam_polygons[id_b])
+            id_a, id_b = cam_ids[i], cam_ids[j]
+            inter = cam_polygons[id_a].intersection(cam_polygons[id_b])
+            if not inter.is_empty and inter.area >= 0.5:
+                adj[id_a].add(id_b)
+                adj[id_b].add(id_a)
+                pair_inter[(id_a, id_b)] = inter
 
-            if intersection.is_empty or intersection.area < 0.5:
-                continue   # not enough overlap to matter
+    # Bron-Kerbosch to find maximal cliques (fine for ≤ 20 cameras)
+    cliques: list[frozenset] = []
 
-            # Extract polygon coords (convex hull for simplicity)
-            hull   = intersection.convex_hull
-            # Use intersection bounds to compute conservative distance threshold (30% of shortest side)
-            minx, miny, maxx, maxy = intersection.bounds
-            z_w = maxx - minx
-            z_h = maxy - miny
-            auto_thresh = round(min(z_w, z_h) * 0.3, 2)
-            
-            coords = [
-                [round(float(x), 2), round(float(y), 2)]
-                for x, y in list(hull.exterior.coords)[:-1]   # drop closing repeat
-            ]
+    def _bk(r: set, p: set, x: set) -> None:
+        if not p and not x:
+            if len(r) >= 2:
+                cliques.append(frozenset(r))
+            return
+        pivot = max(p | x, key=lambda v: len(adj[v] & p))
+        for v in list(p - adj[pivot]):
+            _bk(r | {v}, p & adj[v], x & adj[v])
+            p.remove(v)
+            x.add(v)
 
-            zone_id = f"overlap_{id_a}_{id_b}"
-            # Preserve existing threshold settings if they exist, else use auto_thresh
-            base = existing.get(zone_id, {})
-            new_zones.append({
-                "id":                   zone_id,
-                "cameras":              [id_a, id_b],
-                "floor_polygon":        coords,
-                "distance_threshold_m": base.get("distance_threshold_m", auto_thresh),
-                "buffer_margin_m":      base.get("buffer_margin_m", 0.5),
-                "fusion_strategy":      base.get("fusion_strategy", "weighted_average"),
-            })
+    _bk(set(), set(adj.keys()), set())
+    cliques.sort(key=len, reverse=True)
+
+    # For each clique, try to create a multi-camera zone; fall back to pairs
+    new_zones: list[dict] = []
+    covered_pairs: set = set()
+
+    def _make_zone(cams: list, poly: "Polygon") -> None:
+        hull = poly.convex_hull
+        coords = [
+            [round(float(x), 2), round(float(y), 2)]
+            for x, y in list(hull.exterior.coords)[:-1]
+        ]
+        minx, miny, maxx, maxy = poly.bounds
+        auto_thresh = round(min(maxx - minx, maxy - miny) * 0.3, 2)
+        zone_id = "overlap_" + "_".join(cams)
+        base = existing.get(zone_id, {})
+        new_zones.append({
+            "id":                   zone_id,
+            "cameras":              cams,
+            "floor_polygon":        coords,
+            "distance_threshold_m": base.get("distance_threshold_m", auto_thresh),
+            "buffer_margin_m":      base.get("buffer_margin_m", 0.5),
+            "fusion_strategy":      base.get("fusion_strategy", "weighted_average"),
+        })
+
+    for clique in cliques:
+        cam_list = sorted(clique)
+
+        if len(cam_list) >= 3:
+            # N-way intersection of all cameras in this clique
+            poly = cam_polygons[cam_list[0]]
+            for c in cam_list[1:]:
+                poly = poly.intersection(cam_polygons[c])
+            if not poly.is_empty and poly.area >= 0.5:
+                _make_zone(cam_list, poly)
+                for a, b in combinations(cam_list, 2):
+                    covered_pairs.add(frozenset({a, b}))
+                continue
+
+        # Clique is a pair, or N-way intersection too small → pairwise fallback
+        for a, b in combinations(cam_list, 2):
+            pkey = frozenset({a, b})
+            if pkey in covered_pairs:
+                continue
+            inter = pair_inter.get((a, b)) or pair_inter.get((b, a))
+            if inter is None or inter.is_empty or inter.area < 0.5:
+                continue
+            _make_zone([a, b], inter)
+            covered_pairs.add(pkey)
+
+    # Preserve manually-added zones whose cameras lack coverage polygons
+    # (e.g. NVRCAM01/NVRCAM02 added before calibration with coverage).
+    auto_cam_ids = set(cam_polygons.keys())
+    for zid, zdata in existing.items():
+        zcams = set(zdata.get("cameras", []))
+        if not zcams.issubset(auto_cam_ids):
+            if zid not in {z["id"] for z in new_zones}:
+                new_zones.append(zdata)
 
     with open(OVERLAP_CFG, "w") as f:
         json.dump({"overlap_zones": new_zones}, f, indent=2)
@@ -1191,6 +1253,14 @@ Examples
         "--fuse-only", action="store_true",
         help="Run only the multi-camera fusion step on existing output/*_crossings.csv files",
     )
+    parser.add_argument(
+        "--no-auto-zones", action="store_true", dest="no_auto_zones",
+        help=(
+            "Skip automatic regeneration of overlap_zones.json from\n"
+            "cameras.json coverage polygons before fusion.  By default,\n"
+            "zones are always refreshed so the config stays in sync."
+        ),
+    )
     mode.add_argument(
         "--visualize", metavar="CSV_FILE", type=str,
         help="Visualise offline processing results directly from a generated CSV file",
@@ -1635,7 +1705,11 @@ def main() -> None:
     elif args.fuse_only:
         from fusion.multi_camera_fusion import CrossingFuser
         import glob
-        
+
+        if not getattr(args, "no_auto_zones", False):
+            print("\n[Auto-zones] Regenerating overlap_zones.json from coverage polygons …")
+            auto_configure(silent=False)
+
         print(f"\n[Pipeline] Running multi-camera fusion on existing CSVs...")
         csv_files = glob.glob(str(OUTPUT_DIR / "*_crossings.csv"))
         csv_files = [f for f in csv_files if "fused_crossings" not in f]
