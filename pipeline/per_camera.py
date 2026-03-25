@@ -29,18 +29,42 @@ from pipeline.s3_source import S3VideoSource, _is_s3_uri
 
 # ── Parallel camera processing ───────────────────────────────────────────────
 # Worker entry-point (module-level so it is picklable).
-# Each thread gets its own PersonDetector so ByteTrack state stays isolated.
+# Each process gets its own PersonDetector, CUDA context, and GIL.
+
+_LOG_FMT  = "%(asctime)s  %(levelname)-8s  %(name)s — %(message)s"
+_LOG_DATE = "%H:%M:%S"
+
+
+def _setup_child_logging(log_file: str) -> None:
+    """Configure logging in a spawned child process so output goes to the
+    shared pipeline log file (append mode) with the same format as the parent.
+    Uses line-buffered file to ensure progress messages appear immediately."""
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    if not root.handlers:
+        _stream = open(log_file, "a", buffering=1)  # line-buffered
+        fh = logging.StreamHandler(_stream)
+        fh.setFormatter(logging.Formatter(_LOG_FMT, datefmt=_LOG_DATE))
+        root.addHandler(fh)
+        sh = logging.StreamHandler()
+        sh.setFormatter(logging.Formatter(_LOG_FMT, datefmt=_LOG_DATE))
+        root.addHandler(sh)
+
 
 def _run_camera_in_thread(args: tuple) -> str:
-    """Called by ThreadPoolExecutor — one camera per thread."""
+    """Called by ProcessPoolExecutor — one camera per process (own GIL)."""
     (
         camera_id, config_dir, output_dir,
         model_name, model_confidence, model_classes,
         model_track_point,
         append_output, frame_stride, ocr_interval,
+        log_file,
     ) = args
 
-    # Per-thread model — own detector + ByteTrack state, own CUDA allocation
+    _setup_child_logging(log_file)
+    logging.getLogger("botocore").setLevel(logging.WARNING)
+    logging.getLogger("urllib3").setLevel(logging.WARNING)
+
     cam_model = PersonDetector(
         model_name     = model_name,
         confidence     = model_confidence,
@@ -267,8 +291,11 @@ class PerCameraProcessor:
         # ── Video iterator: S3 with prefetch, or local list ──────────────────
         if is_s3:
             _video_iter = self._s3_source.iter_videos_prefetch(ahead=1)
+            _num_videos = len(self._s3_source)
         else:
             _video_iter = iter(self.video_paths)
+            _num_videos = len(self.video_paths)
+        _video_num = 0
 
         for vpath in _video_iter:
             # S3 download failures surface as the value of the future —
@@ -278,11 +305,9 @@ class PerCameraProcessor:
                 logger.error("[%s] Skipping file — download error: %s", self.camera_id, vpath)
                 continue
 
-            logger.info("[%s] Processing file: %s", self.camera_id, vpath.name)
-            logger.info(
-                "[%s] Opening video (first frame + YOLO warm-up may take 30–60 s)…",
-                self.camera_id,
-            )
+            _video_num += 1
+            logger.info("[%s] ▶ Video %d/%d: %s",
+                        self.camera_id, _video_num, _num_videos, vpath.name)
             self.cap = cv2.VideoCapture(str(vpath))
             if not self.cap.isOpened():
                 logger.error("[%s] Failed to open video: %s", self.camera_id, vpath)
@@ -402,13 +427,16 @@ class PerCameraProcessor:
                         _tracks_file.flush()
                         self.crossing_detector._csv_file.flush()
 
-                    # Progress reporting
-                    if self._total_frames == 0 and frame_idx % 500 == 0:
+                    # Progress reporting every 500 processed frames
+                    if processed_count > 0 and processed_count % 500 == 0:
                         elapsed = time.time() - _t_start
                         fps_actual = processed_count / elapsed if elapsed > 0 else 0
+                        _cap_total = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT)) if self.cap else 0
                         logger.info(
-                            "[%s] Frames read: %d  processed: %d  throughput: %.1f fps",
-                            self.camera_id, frame_idx, processed_count, fps_actual,
+                            "[%s] Video %d/%d — frame %d/%d  |  total processed: %d  |  %.1f fps",
+                            self.camera_id, _video_num, _num_videos,
+                            _frames_in_file, _cap_total,
+                            processed_count, fps_actual,
                         )
                     if progress_callback is not None:
                         progress_callback(frame_idx, self._total_frames)
@@ -489,8 +517,8 @@ class MultiCameraRunner:
         # Reference detector carries model_name / confidence / track_point
         # for worker threads — each thread creates its own instance.
         logger.info(
-            "MultiCameraRunner: %d cameras, model=%s, conf=%.2f, track_point=%s, append=%s",
-            len(self.cameras), model_path, confidence, track_point, append_output,
+            "MultiCameraRunner: %d cameras, conf=%.2f, track_point=%s, append=%s",
+            len(self.cameras), confidence, track_point, append_output,
         )
         self.detector = PersonDetector(
             model_name     = model_path,
@@ -530,7 +558,8 @@ class MultiCameraRunner:
         List[str]
             CSV output paths, one per successfully processed camera.
         """
-        from concurrent.futures import ThreadPoolExecutor, as_completed
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+        import multiprocessing as _mp
 
         _t0 = time.time()
         output_paths: List[str] = []
@@ -586,7 +615,8 @@ class MultiCameraRunner:
             len(self.cameras), _workers, frame_stride, ocr_interval,
         )
 
-        # Build argument tuples for worker threads
+        # Build argument tuples for worker processes
+        _log_file = str(self.output_dir / "pipeline_process.log")
         task_args = [
             (
                 cam["id"],
@@ -599,13 +629,15 @@ class MultiCameraRunner:
                 self.append_output,
                 frame_stride,
                 ocr_interval,
+                _log_file,
             )
             for cam in self.cameras
         ]
 
-        with ThreadPoolExecutor(
+        _ctx = _mp.get_context("spawn")
+        with ProcessPoolExecutor(
             max_workers=_workers,
-            thread_name_prefix="cam_worker",
+            mp_context=_ctx,
         ) as pool:
             future_to_cam = {
                 pool.submit(_run_camera_in_thread, args): args[0]

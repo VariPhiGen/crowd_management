@@ -55,7 +55,7 @@ class TimestampExtractor:
             self.roi = None
 
         if easyocr is None:
-            logger.error("[%s] easyocr module not found. Extraction disabled.", self.camera_id)
+            logger.error("[%s] OCR module not found. Extraction disabled.", self.camera_id)
             self.reader = None
         else:
             # Auto-detect GPU — EasyOCR is 5-10x faster on GPU
@@ -64,7 +64,7 @@ class TimestampExtractor:
                 _use_gpu = torch.cuda.is_available()
             except Exception:
                 _use_gpu = False
-            logger.info("[%s] EasyOCR initializing (gpu=%s)...", self.camera_id, _use_gpu)
+            logger.info("[%s] OCR engine initializing (gpu=%s)...", self.camera_id, _use_gpu)
             self.reader = easyocr.Reader(['en'], gpu=_use_gpu)
 
         # State tracking for fallback and drift detection
@@ -184,7 +184,7 @@ class TimestampExtractor:
             results = self.reader.readtext(processed, detail=0)
             raw_text = " ".join(results)
         except Exception as e:
-            logger.debug("[%s] easyocr error: %s", self.camera_id, e)
+            logger.debug("[%s] OCR error: %s", self.camera_id, e)
             return None
             
         clean_text = self._clean_text(raw_text)

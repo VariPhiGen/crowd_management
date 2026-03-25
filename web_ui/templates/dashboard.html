@@ -499,7 +499,10 @@
     refreshHealth();
     setInterval(refreshHealth, 15000);   // refresh every 15 s
 
+    let _autoRefreshTimer = null;
+
     function cancelJob(jobId) {
+        if (_autoRefreshTimer) clearTimeout(_autoRefreshTimer);
         if(confirm("Are you sure you want to cancel this job?")) {
             fetch(`/api/cancel_job/${jobId}`, {
                 method: 'POST'
@@ -510,17 +513,21 @@
                     location.reload();
                 } else {
                     alert("Failed to cancel job: " + data.error);
+                    _scheduleRefresh();
                 }
-            });
+            })
+            .catch(() => { _scheduleRefresh(); });
+        } else {
+            _scheduleRefresh();
         }
     }
-    
-    // Auto refresh dashboard every 5 seconds if jobs are active
-    {% if active_jobs %}
-    setTimeout(() => {
-        location.reload();
-    }, 5000);
-    {% endif %}
+
+    function _scheduleRefresh() {
+        {% if active_jobs %}
+        _autoRefreshTimer = setTimeout(() => { location.reload(); }, 5000);
+        {% endif %}
+    }
+    _scheduleRefresh();
 </script>
 </body>
 </html>

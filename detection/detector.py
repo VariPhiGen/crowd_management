@@ -264,8 +264,8 @@ class PersonDetector:
                 if self.target_classes else ["all"]
             )
             logger.info(
-                "PersonDetector: loaded '%s' on device=%s — tracking classes: %s",
-                model_name, device, _class_names,
+                "PersonDetector: model loaded on device=%s — tracking classes: %s",
+                device, _class_names,
             )
         except ImportError:
             logger.warning(
@@ -274,8 +274,7 @@ class PersonDetector:
             )
         except Exception as exc:
             logger.error(
-                "Failed to load YOLO model '%s': %s",
-                model_name, exc,
+                "Failed to load detection model: %s", exc,
             )
 
     # ──────────────────────────────────────────────────────────────────────
@@ -313,7 +312,7 @@ class PersonDetector:
                 verbose      = False,
             )
         except Exception as exc:
-            logger.error("YOLO inference error: %s", exc)
+            logger.error("Detection inference error: %s", exc)
             return []
 
         return self._parse(results)
@@ -351,7 +350,7 @@ class PersonDetector:
                 tracker      = "bytetrack.yaml",
             )
         except Exception as exc:
-            logger.error("YOLO track error: %s — falling back to detect()", exc)
+            logger.error("Tracking error: %s — falling back to detect()", exc)
             return self.detect(frame)
 
         return self._parse(results, use_track_ids=True)

@@ -1,5 +1,6 @@
 from flask import Flask, render_template, request, redirect, url_for, session, send_from_directory, jsonify, send_file
 import os
+import signal
 import json
 import subprocess
 import io
@@ -54,6 +55,36 @@ OUTPUT_DIR   = PROJECT_ROOT / "output"
 
 # In-memory store for background job statuses
 background_jobs = {}
+
+# Map job keys to their log filenames
+_JOB_LOG_MAP = {
+    "pipeline_main": "pipeline_process.log",
+    "pipeline_fuse": "pipeline_fuse.log",
+    "pipeline_visualize": "pipeline_visualize.log",
+    "floor_auto_config": "auto_config.log",
+}
+
+# Persistent job registry on disk so all gunicorn workers can see/cancel jobs
+JOBS_DIR = PROJECT_ROOT / "output" / ".jobs"
+JOBS_DIR.mkdir(parents=True, exist_ok=True)
+
+def _save_job_pid(job_id: str, pid: int, name: str = ""):
+    """Write a job's PID to disk so any worker can find and kill it."""
+    (JOBS_DIR / f"{job_id}.json").write_text(
+        json.dumps({"pid": pid, "name": name, "start_time": time.time()})
+    )
+
+def _remove_job_pid(job_id: str):
+    (JOBS_DIR / f"{job_id}.json").unlink(missing_ok=True)
+
+def _load_job_pid(job_id: str) -> dict | None:
+    p = JOBS_DIR / f"{job_id}.json"
+    if p.exists():
+        try:
+            return json.loads(p.read_text())
+        except Exception:
+            return None
+    return None
 
 # ADMIN CREDENTIALS
 ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
@@ -145,6 +176,20 @@ def dashboard():
             python_exec = _sys.executable
 
             if action == 'process':
+                # Prevent duplicate runs — check if a pipeline job is already active
+                for _jf in JOBS_DIR.glob("pipeline_main.json"):
+                    _dj = _load_job_pid("pipeline_main")
+                    if _dj:
+                        try:
+                            os.kill(_dj["pid"], 0)
+                            error = "A processing job is already running. Cancel it first."
+                            return render_template('dashboard.html', cameras=cameras,
+                                message=message, error=error, active_jobs={},
+                                selected_cameras=selected_cameras,
+                                floor_cfg=floor_cfg, edges_info=edges_info)
+                        except (ProcessLookupError, PermissionError):
+                            _remove_job_pid("pipeline_main")
+
                 # Read performance / detection settings from form
                 workers        = int(request.form.get('workers', 4))
                 frame_stride   = int(request.form.get('frame_stride', 2))
@@ -176,15 +221,18 @@ def dashboard():
                 log_file = OUTPUT_DIR / "pipeline_process.log"
                 log_f = open(log_file, 'w')
                 proc = subprocess.Popen(cmd, cwd=str(PROJECT_ROOT), env=env,
-                                        stdout=log_f, stderr=subprocess.STDOUT)
+                                        stdout=log_f, stderr=subprocess.STDOUT,
+                                        start_new_session=True)
                 log_f.close()
+                job_name = f'Main Pipeline (workers={workers}, stride={frame_stride}, classes={classes})'
                 background_jobs["pipeline_main"] = {
                     'process':    proc,
                     'log_file':   str(log_file),
                     'start_time': time.time(),
                     'status':     'running',
-                    'name':       f'Main Pipeline (workers={workers}, stride={frame_stride}, classes={classes})',
+                    'name':       job_name,
                 }
+                _save_job_pid("pipeline_main", proc.pid, job_name)
                 message = (
                     f"Full pipeline started — {workers} cameras in parallel, "
                     f"stride {frame_stride}, OCR {'auto' if ocr_interval == 0 else str(ocr_interval) + 'f'}, "
@@ -207,7 +255,8 @@ def dashboard():
                 log_file = OUTPUT_DIR / "pipeline_fuse.log"
                 log_f = open(log_file, 'w')
                 proc = subprocess.Popen(cmd, cwd=str(PROJECT_ROOT), env=env,
-                                        stdout=log_f, stderr=subprocess.STDOUT)
+                                        stdout=log_f, stderr=subprocess.STDOUT,
+                                        start_new_session=True)
                 log_f.close()
                 background_jobs["pipeline_fuse"] = {
                     'process':    proc,
@@ -216,6 +265,7 @@ def dashboard():
                     'status':     'running',
                     'name':       'Fusion Stage',
                 }
+                _save_job_pid("pipeline_fuse", proc.pid, "Fusion Stage")
                 message = "Fusion stage started in the background."
 
             elif action == 'visualize':
@@ -230,7 +280,8 @@ def dashboard():
                     log_file = OUTPUT_DIR / "pipeline_visualize.log"
                     log_f = open(log_file, 'w')
                     proc = subprocess.Popen(cmd, cwd=str(PROJECT_ROOT), env=env,
-                                            stdout=log_f, stderr=subprocess.STDOUT)
+                                            stdout=log_f, stderr=subprocess.STDOUT,
+                                            start_new_session=True)
                     log_f.close()
                     background_jobs["pipeline_visualize"] = {
                         'process':    proc,
@@ -239,6 +290,7 @@ def dashboard():
                         'status':     'running',
                         'name':       'Visualization Generation',
                     }
+                    _save_job_pid("pipeline_visualize", proc.pid, "Visualization Generation")
                     message = "Visualization generation started. MP4 will appear in Results when finished."
 
         except Exception as e:
@@ -260,7 +312,7 @@ def dashboard():
                 poll = j_data['process'].poll()
                 if poll is not None:
                     j_data['status'] = 'finished' if poll == 0 else 'failed'
-            # read tail of log
+                    _remove_job_pid(j_key)
             logs = ""
             if os.path.exists(j_data['log_file']):
                 try:
@@ -276,6 +328,38 @@ def dashboard():
                 'log_file': j_data['log_file'],
                 'elapsed':  int(_now - j_data.get('start_time', _now)),
             }
+
+    # Also pick up jobs started by other gunicorn workers (disk registry)
+    for jf in JOBS_DIR.glob("*.json"):
+        j_key = jf.stem
+        if j_key in active_jobs:
+            continue
+        disk_job = _load_job_pid(j_key)
+        if not disk_job:
+            continue
+        pid = disk_job.get("pid")
+        # Check if the process is still alive
+        try:
+            os.kill(pid, 0)
+            status = 'running'
+        except (ProcessLookupError, PermissionError):
+            status = 'finished'
+            _remove_job_pid(j_key)
+        log_path = str(OUTPUT_DIR / _JOB_LOG_MAP.get(j_key, f"{j_key}.log"))
+        logs = ""
+        if os.path.exists(log_path):
+            try:
+                with open(log_path, 'r', encoding='utf-8', errors='replace') as f:
+                    logs = f.readlines()[-8:]
+            except Exception:
+                logs = []
+        active_jobs[j_key] = {
+            'name':    disk_job.get("name", j_key),
+            'status':  status,
+            'logs':    "".join(logs) if isinstance(logs, list) else logs,
+            'log_file': log_path,
+            'elapsed': int(_now - disk_job.get("start_time", _now)),
+        }
 
     return render_template('dashboard.html', cameras=cameras, message=message, error=error,
                            active_jobs=active_jobs, selected_cameras=selected_cameras,
@@ -314,6 +398,7 @@ def floor_config_action():
             [python_exec, 'main.py', '--auto-config'],
             cwd=str(PROJECT_ROOT), env=env,
             stdout=log_f, stderr=subprocess.STDOUT,
+            start_new_session=True,
         )
         log_f.close()
         background_jobs['floor_auto_config'] = {
@@ -323,6 +408,7 @@ def floor_config_action():
             'status':     'running',
             'name':       'Auto-compute Floor Config',
         }
+        _save_job_pid('floor_auto_config', proc.pid, 'Auto-compute Floor Config')
         return redirect(url_for('dashboard') + '?floor_msg=Auto-compute+started.+Check+Running+Jobs.')
 
     elif action == 'regen_edges':
@@ -379,10 +465,20 @@ def system_health():
     except Exception:
         health['gpu_vram_used_mb'] = None
 
-    # Running jobs
-    health['running_jobs'] = sum(
-        1 for v in background_jobs.values() if v.get('status') == 'running'
-    )
+    # Running jobs — count from both in-memory and disk registry
+    _running = sum(1 for v in background_jobs.values() if v.get('status') == 'running')
+    for _jf in JOBS_DIR.glob("*.json"):
+        _jkey = _jf.stem
+        if _jkey in background_jobs and background_jobs[_jkey].get('status') == 'running':
+            continue
+        _dj = _load_job_pid(_jkey)
+        if _dj:
+            try:
+                os.kill(_dj["pid"], 0)
+                _running += 1
+            except (ProcessLookupError, PermissionError):
+                _remove_job_pid(_jkey)
+    health['running_jobs'] = _running
 
     return jsonify(health)
 
@@ -392,10 +488,14 @@ def job_log(job_key):
     """Return full log content for a background job (plain text)."""
     if not session.get('logged_in'):
         return "Unauthorized", 401
+
+    log_path = None
     job = background_jobs.get(job_key)
-    if not job:
-        return "Job not found", 404
-    log_path = job.get('log_file', '')
+    if job:
+        log_path = job.get('log_file', '')
+    if not log_path:
+        log_path = str(OUTPUT_DIR / _JOB_LOG_MAP.get(job_key, f"{job_key}.log"))
+
     if not log_path or not os.path.exists(log_path):
         return "Log file not found", 404
     try:
@@ -1028,14 +1128,17 @@ def camera_intrinsic(cam_id):
     try:
         # Open log file for output
         log_f = open(log_file, 'w')
-        proc = subprocess.Popen(cmd, cwd=str(PROJECT_ROOT), env=env, stdout=log_f, stderr=subprocess.STDOUT)
+        proc = subprocess.Popen(cmd, cwd=str(PROJECT_ROOT), env=env, stdout=log_f, stderr=subprocess.STDOUT,
+                                start_new_session=True)
         log_f.close()
-        background_jobs[f"intrinsic_{cam_id}"] = {
+        job_key = f"intrinsic_{cam_id}"
+        background_jobs[job_key] = {
             'process': proc,
             'log_file': str(log_file),
             'start_time': time.time(),
             'status': 'running'
         }
+        _save_job_pid(job_key, proc.pid, f"Intrinsic calibration ({cam_id})")
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)})
     
@@ -1078,19 +1181,46 @@ def camera_status(cam_id):
 
 @app.route('/api/cancel_job/<job_id>', methods=['POST'])
 def cancel_job(job_id):
-    """API endpoint to cancel a running background job."""
+    """API endpoint to cancel a running background job.
+    
+    Works across gunicorn workers by looking up the PID from a shared
+    on-disk registry (JOBS_DIR) when the in-memory dict doesn't have it.
+    """
+    pid = None
+
+    # Try in-memory first (same worker that started the job)
     if job_id in background_jobs:
         job = background_jobs[job_id]
         if job['status'] == 'running':
-            proc = job['process']
-            try:
-                # Try terminate first
-                proc.terminate()
-                job['status'] = 'cancelled'
-                return jsonify({'success': True, 'message': f'Job {job_id} cancelled.'})
-            except Exception as e:
-                return jsonify({'success': False, 'error': str(e)})
-    return jsonify({'success': False, 'error': 'Job not found or not running.'})
+            pid = job['process'].pid
+
+    # Fallback: disk-based PID registry (works across workers)
+    if pid is None:
+        disk_job = _load_job_pid(job_id)
+        if disk_job:
+            pid = disk_job.get("pid")
+
+    if pid is None:
+        return jsonify({'success': False, 'error': 'Job not found or not running.'})
+
+    try:
+        pgid = os.getpgid(pid)
+        os.killpg(pgid, signal.SIGTERM)
+        time.sleep(3)
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    except ProcessLookupError:
+        pass
+    except Exception as e:
+        return jsonify({'success': False, 'error': str(e)})
+
+    # Clean up
+    if job_id in background_jobs:
+        background_jobs[job_id]['status'] = 'cancelled'
+    _remove_job_pid(job_id)
+    return jsonify({'success': True, 'message': f'Job {job_id} cancelled.'})
 
 @app.route('/output/<filename>')
 def serve_output(filename):

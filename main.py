@@ -780,9 +780,9 @@ def run_live(source_dir: str = None, debug: bool = False,
     mappers = load_all_homographies(CONFIG_DIR)
 
     # ── 3. Shared detector ────────────────────────────────────────────────
-    logger.info("[Live] Loading YOLO model …")
+    logger.info("[Live] Loading detection model …")
     detector = PersonDetector(model_name=model_name, confidence=0.45)
-    logger.info("[Live] YOLO ready.")
+    logger.info("[Live] Detection model ready.")
 
     # ── 4. CameraProcessors ───────────────────────────────────────────────
     processors: list[tuple[str, CameraProcessor, dict]] = []
