@@ -1253,6 +1253,10 @@ Examples
         "--fuse-only", action="store_true",
         help="Run only the multi-camera fusion step on existing output/*_crossings.csv files",
     )
+    mode.add_argument(
+        "--repair-only", action="store_true",
+        help="Run timestamp deep-repair on existing output CSVs (uses expected_date_range from fusion_config.json)",
+    )
     parser.add_argument(
         "--no-auto-zones", action="store_true", dest="no_auto_zones",
         help=(
@@ -1435,6 +1439,7 @@ def main() -> None:
     if not any([args.phase, args.intrinsic, args.calibrate,
                 args.coverage, args.ocr_region, args.ocr_test,
                 args.process, args.process_camera, args.fuse_only,
+                args.repair_only,
                 args.visualize, args.run, args.demo, args.auto_config]):
         parser.print_help()
         sys.exit(0)
@@ -1702,8 +1707,35 @@ def main() -> None:
             sys.exit(1)
 
     # ------------------------------------------------------------------
+    elif args.repair_only:
+        from pipeline.timestamp_repair import repair_before_fusion
+        import glob
+
+        print(f"\n[Deep Repair] Running timestamp repair on existing CSVs...")
+        csv_files = glob.glob(str(OUTPUT_DIR / "*_crossings.csv"))
+        csv_files = [f for f in csv_files if "fused_crossings" not in f]
+
+        if args.cameras:
+            _cam_ids = [c.strip() for c in args.cameras.split(",")]
+            csv_files = [
+                f for f in csv_files
+                if any(Path(f).stem.startswith(cid + "_") or Path(f).stem == cid
+                       for cid in _cam_ids)
+            ]
+            print(f"Camera filter active: {_cam_ids}")
+
+        if not csv_files:
+            print(f"  ✗  No per-camera CSVs found in {OUTPUT_DIR}/")
+            sys.exit(1)
+
+        print(f"Found {len(csv_files)} camera CSVs.")
+        repair_before_fusion(csv_files, output_dir=str(OUTPUT_DIR), config_dir=str(CONFIG_DIR))
+        print("  ✓  Deep repair complete.")
+
+    # ------------------------------------------------------------------
     elif args.fuse_only:
         from fusion.multi_camera_fusion import CrossingFuser
+        from pipeline.timestamp_repair import repair_before_fusion
         import glob
 
         if not getattr(args, "no_auto_zones", False):
@@ -1729,10 +1761,12 @@ def main() -> None:
             sys.exit(1)
             
         print(f"Found {len(csv_files)} camera CSVs.")
-        
+
+        # Pre-fusion timestamp repair (year/month fix + date-range report)
+        repair_before_fusion(csv_files, output_dir=str(OUTPUT_DIR), config_dir=str(CONFIG_DIR))
+
         tol = args.timestamp_tolerance
         if tol is None:
-            # Fallback to configured
             try:
                 with open(FUSION_CFG) as _f:
                     fcfg = json.load(_f)
@@ -1748,16 +1782,23 @@ def main() -> None:
         )
         
         fused_df = fuser.fuse(csv_files)
-        out_path = str(OUTPUT_DIR / "fused_crossings.csv")
+        from datetime import datetime as _dt
+        _ts = _dt.now().strftime("%Y%m%d_%H%M%S")
+        out_path = str(OUTPUT_DIR / f"fused_crossings_{_ts}.csv")
         fuser.save_fused_csv(fused_df, out_path)
+        # Also write a "latest" symlink / copy for backwards compat
+        _latest = str(OUTPUT_DIR / "fused_crossings.csv")
+        import shutil
+        shutil.copy2(out_path, _latest)
         
-        print("\n  ✓  Fusion complete")
+        print(f"\n  ✓  Fusion complete → {Path(out_path).name}")
 
     # ------------------------------------------------------------------
     elif args.process:
         from pipeline.per_camera import MultiCameraRunner
         from fusion.multi_camera_fusion import CrossingFuser
-        
+        from pipeline.timestamp_repair import repair_before_fusion
+
         print(f"\n[Pipeline] Validating cameras for full processing...")
         with open(CAMERAS_CFG) as _f:
             _cfg = json.load(_f)
@@ -1798,7 +1839,10 @@ def main() -> None:
             ocr_interval  = args.ocr_interval,
         )
         
-        # 2. Fusion
+        # 2. Pre-fusion timestamp repair
+        repair_before_fusion(csv_paths, output_dir=str(OUTPUT_DIR), config_dir=str(CONFIG_DIR))
+
+        # 3. Fusion
         print(f"\n[Pipeline] Running multi-camera fusion...")
         tol = args.timestamp_tolerance
         if tol is None:
@@ -1817,8 +1861,13 @@ def main() -> None:
         )
         fused_df = fuser.fuse(csv_paths)
         
-        out_path = str(OUTPUT_DIR / "fused_crossings.csv")
+        from datetime import datetime as _dt
+        _ts = _dt.now().strftime("%Y%m%d_%H%M%S")
+        out_path = str(OUTPUT_DIR / f"fused_crossings_{_ts}.csv")
         fuser.save_fused_csv(fused_df, out_path)
+        _latest = str(OUTPUT_DIR / "fused_crossings.csv")
+        import shutil
+        shutil.copy2(out_path, _latest)
         
         try:
             import pandas as pd

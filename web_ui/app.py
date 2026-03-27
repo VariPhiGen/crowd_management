@@ -51,6 +51,7 @@ CONFIG_DIR   = PROJECT_ROOT / "config"
 CAMERAS_CFG  = CONFIG_DIR / "cameras.json"
 FLOOR_CFG    = CONFIG_DIR / "floor_config.json"
 EDGES_CFG    = CONFIG_DIR / "edges.json"
+FUSION_CFG   = CONFIG_DIR / "fusion_config.json"
 OUTPUT_DIR   = PROJECT_ROOT / "output"
 
 # In-memory store for background job statuses
@@ -62,6 +63,7 @@ _JOB_LOG_MAP = {
     "pipeline_fuse": "pipeline_fuse.log",
     "pipeline_visualize": "pipeline_visualize.log",
     "floor_auto_config": "auto_config.log",
+    "deep_repair": "deep_repair.log",
 }
 
 # Persistent job registry on disk so all gunicorn workers can see/cancel jobs
@@ -120,6 +122,34 @@ def get_edges_info() -> dict:
         return {"count": 0, "step_m": 1.0, "is_auto": True}
 
 
+def get_fusion_config() -> dict:
+    """Read fusion_config.json; return sensible defaults if missing."""
+    defaults = {
+        "timestamp_tolerance_s": 1.0,
+        "default_distance_threshold_m": 2.0,
+        "expected_date_range": {"start": "", "end": ""},
+    }
+    try:
+        with open(FUSION_CFG) as f:
+            data = json.load(f)
+        defaults.update(data)
+    except Exception:
+        pass
+    return defaults
+
+
+def save_expected_date_range(start_date: str, end_date: str) -> None:
+    """Persist expected_date_range to fusion_config.json."""
+    try:
+        with open(FUSION_CFG) as f:
+            cfg = json.load(f)
+    except Exception:
+        cfg = {}
+    cfg["expected_date_range"] = {"start": start_date, "end": end_date}
+    with open(FUSION_CFG, "w") as f:
+        json.dump(cfg, f, indent=4)
+
+
 def get_cameras():
     """Reads cameras.json to get the list of active cameras."""
     try:
@@ -160,6 +190,7 @@ def dashboard():
     cameras      = get_cameras()
     floor_cfg    = get_floor_config()
     edges_info   = get_edges_info()
+    fusion_cfg   = get_fusion_config()
     message = request.args.get('floor_msg') or None
     error   = request.args.get('floor_err') or None
     # Default: all cameras selected; remembered across POST so checkboxes persist
@@ -185,7 +216,7 @@ def dashboard():
                             error = "A processing job is already running. Cancel it first."
                             return render_template('dashboard.html', cameras=cameras,
                                 message=message, error=error, active_jobs={},
-                                selected_cameras=selected_cameras,
+                                selected_cameras=selected_cameras, fusion_cfg=fusion_cfg,
                                 floor_cfg=floor_cfg, edges_info=edges_info)
                         except (ProcessLookupError, PermissionError):
                             _remove_job_pid("pipeline_main")
@@ -199,6 +230,10 @@ def dashboard():
                 track_point    = request.form.get('track_point', 'bottom').strip()
                 fusion_time    = float(request.form.get('fusion_time_tol', 1.0))
                 fusion_dist    = float(request.form.get('fusion_dist_tol', 2.5))
+                date_start     = request.form.get('date_range_start', '').strip()
+                date_end       = request.form.get('date_range_end', '').strip()
+                if date_start and date_end:
+                    save_expected_date_range(date_start, date_end)
                 # Camera selection — empty list means "all cameras"
                 selected_cams  = request.form.getlist('camera_ids')
                 cameras_arg    = ','.join(selected_cams) if selected_cams else None
@@ -242,6 +277,10 @@ def dashboard():
             elif action == 'fuse':
                 fusion_time   = float(request.form.get('fusion_time_tol', 1.0))
                 fusion_dist   = float(request.form.get('fusion_dist_tol', 2.5))
+                date_start    = request.form.get('date_range_start', '').strip()
+                date_end      = request.form.get('date_range_end', '').strip()
+                if date_start and date_end:
+                    save_expected_date_range(date_start, date_end)
                 selected_cams = request.form.getlist('camera_ids')
                 cameras_arg   = ','.join(selected_cams) if selected_cams else None
                 cmd = [
@@ -267,6 +306,36 @@ def dashboard():
                 }
                 _save_job_pid("pipeline_fuse", proc.pid, "Fusion Stage")
                 message = "Fusion stage started in the background."
+
+            elif action == 'deep_repair':
+                date_start    = request.form.get('date_range_start', '').strip()
+                date_end      = request.form.get('date_range_end', '').strip()
+                if not date_start or not date_end:
+                    error = "Please set both Start Date and End Date before running Deep Repair."
+                else:
+                    save_expected_date_range(date_start, date_end)
+                    selected_cams = request.form.getlist('camera_ids')
+                    cameras_arg   = ','.join(selected_cams) if selected_cams else None
+                    cmd = [python_exec, "main.py", "--repair-only"]
+                    if cameras_arg:
+                        cmd += ["--cameras", cameras_arg]
+
+                    log_file = OUTPUT_DIR / "deep_repair.log"
+                    log_f = open(log_file, 'w')
+                    proc = subprocess.Popen(cmd, cwd=str(PROJECT_ROOT), env=env,
+                                            stdout=log_f, stderr=subprocess.STDOUT,
+                                            start_new_session=True)
+                    log_f.close()
+                    background_jobs["deep_repair"] = {
+                        'process':    proc,
+                        'log_file':   str(log_file),
+                        'start_time': time.time(),
+                        'status':     'running',
+                        'name':       'Deep Repair',
+                    }
+                    _save_job_pid("deep_repair", proc.pid, "Deep Repair")
+                    cams_label = cameras_arg or "all cameras"
+                    message = f"Deep Repair started for {cams_label} (range: {date_start} → {date_end}). Check logs below."
 
             elif action == 'visualize':
                 csv_path = OUTPUT_DIR / "fused_crossings.csv"
@@ -363,7 +432,7 @@ def dashboard():
 
     return render_template('dashboard.html', cameras=cameras, message=message, error=error,
                            active_jobs=active_jobs, selected_cameras=selected_cameras,
-                           floor_cfg=floor_cfg, edges_info=edges_info)
+                           floor_cfg=floor_cfg, edges_info=edges_info, fusion_cfg=fusion_cfg)
 
 @app.route('/api/floor-config', methods=['POST'])
 def floor_config_action():
@@ -1240,6 +1309,84 @@ def results():
                     'type': 'Video' if file.suffix == '.mp4' else 'Data'
                 })
     return render_template('results.html', files=files)
+
+
+# ------------------------------------------------------------------
+#  Geo-Transform: add lat/lng to fused crossing CSVs
+# ------------------------------------------------------------------
+
+def _list_fused_csvs() -> list[dict]:
+    """Return fused_crossings_*.csv files sorted newest-first."""
+    out = []
+    if OUTPUT_DIR.exists():
+        for f in sorted(OUTPUT_DIR.glob("fused_crossings*.csv"), reverse=True):
+            if "_lat_long" in f.name:
+                continue
+            out.append({
+                "name": f.name,
+                "size": f"{f.stat().st_size / (1024*1024):.1f} MB",
+            })
+    return out
+
+
+@app.route('/geo-transform', methods=['GET', 'POST'])
+def geo_transform_page():
+    import sys as _sys
+    _sys.path.insert(0, str(PROJECT_ROOT))
+    from pipeline.geo_transform import GeoRefPoint, run_geo_transform
+
+    fused_files = _list_fused_csvs()
+    result = None
+    form_data = {
+        "selected_file": "",
+        "points": [
+            {"floor_x": "", "floor_y": "", "lat": "", "lng": ""},
+            {"floor_x": "", "floor_y": "", "lat": "", "lng": ""},
+            {"floor_x": "", "floor_y": "", "lat": "", "lng": ""},
+        ],
+    }
+
+    if request.method == 'POST':
+        selected = request.form.get('fused_file', '')
+        form_data["selected_file"] = selected
+
+        floor_xs = request.form.getlist('floor_x')
+        floor_ys = request.form.getlist('floor_y')
+        lats = request.form.getlist('lat')
+        lngs = request.form.getlist('lng')
+
+        points_raw = []
+        form_points = []
+        for fx, fy, la, ln in zip(floor_xs, floor_ys, lats, lngs):
+            form_points.append({"floor_x": fx, "floor_y": fy, "lat": la, "lng": ln})
+            fx_s, fy_s, la_s, ln_s = fx.strip(), fy.strip(), la.strip(), ln.strip()
+            if fx_s and fy_s and la_s and ln_s:
+                try:
+                    points_raw.append(GeoRefPoint(
+                        float(fx_s), float(fy_s), float(la_s), float(ln_s)
+                    ))
+                except ValueError:
+                    pass
+        form_data["points"] = form_points
+
+        if not selected:
+            result = {"ok": False, "error": "Please select a fused crossings CSV."}
+        elif len(points_raw) < 3:
+            result = {"ok": False, "error": f"Need at least 3 valid reference points, got {len(points_raw)}."}
+        else:
+            input_csv = str(OUTPUT_DIR / selected)
+            stem = selected.replace(".csv", "")
+            output_csv = str(OUTPUT_DIR / f"{stem}_lat_long.csv")
+            result = run_geo_transform(points_raw, input_csv, output_csv)
+            if result["ok"]:
+                result["output_name"] = Path(output_csv).name
+
+    return render_template(
+        'geo_transform.html',
+        fused_files=fused_files,
+        result=result,
+        form_data=form_data,
+    )
 
 @app.route('/download/<filename>')
 def download_file(filename):

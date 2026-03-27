@@ -13,6 +13,7 @@
     <div class="container">
         <a class="navbar-brand" href="/">Crimenabi</a>
         <div class="d-flex">
+            <a href="/geo-transform" class="btn btn-outline-light me-2 badge">Geo-Transform</a>
             <a href="/results" class="btn btn-outline-light me-2 badge">View Results</a>
             <a href="/logout" class="btn btn-danger badge">Logout</a>
         </div>
@@ -153,6 +154,34 @@
                             </div>
                         </div>
 
+                        <!-- ── Expected Date Range (timestamp repair) ─────── -->
+                        <div class="row g-3 mb-3 align-items-end p-3 bg-white rounded border">
+                            <div class="col-12 pb-0">
+                                <span class="fw-semibold small text-secondary text-uppercase letter-spacing-1">
+                                    Expected Recording Date Range
+                                </span>
+                                <span class="text-muted fw-normal small ms-1">— timestamps outside this range are auto-repaired before fusion</span>
+                            </div>
+                            <div class="col-auto">
+                                <label class="form-label fw-semibold mb-1" for="date_range_start">
+                                    Start Date
+                                </label>
+                                <input type="date" class="form-control form-control-sm"
+                                       id="date_range_start" name="date_range_start"
+                                       value="{{ fusion_cfg.expected_date_range.start if fusion_cfg and fusion_cfg.expected_date_range else '' }}"
+                                       style="width:160px">
+                            </div>
+                            <div class="col-auto">
+                                <label class="form-label fw-semibold mb-1" for="date_range_end">
+                                    End Date
+                                </label>
+                                <input type="date" class="form-control form-control-sm"
+                                       id="date_range_end" name="date_range_end"
+                                       value="{{ fusion_cfg.expected_date_range.end if fusion_cfg and fusion_cfg.expected_date_range else '' }}"
+                                       style="width:160px">
+                            </div>
+                        </div>
+
                         <!-- ── Fusion thresholds ───────────────────────────── -->
                         <div class="row g-3 mb-3 align-items-end p-3 bg-white rounded border">
                             <div class="col-12 pb-0">
@@ -189,6 +218,11 @@
                         <button type="submit" name="pipeline_action" value="fuse"
                                 class="btn btn-secondary me-2 mb-2">
                             Run Fusion Only
+                        </button>
+                        <button type="submit" name="pipeline_action" value="deep_repair"
+                                class="btn btn-warning me-2 mb-2"
+                                title="Repair timestamps in selected camera CSVs using the date range above">
+                            🔧 Deep Repair
                         </button>
                         <button type="submit" name="pipeline_action" value="visualize"
                                 class="btn btn-info text-white mb-2">

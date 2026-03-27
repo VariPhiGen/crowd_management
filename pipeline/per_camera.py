@@ -35,15 +35,21 @@ _LOG_FMT  = "%(asctime)s  %(levelname)-8s  %(name)s — %(message)s"
 _LOG_DATE = "%H:%M:%S"
 
 
+class _FlushFileHandler(logging.FileHandler):
+    """FileHandler that flushes after every emit — guarantees log lines
+    reach disk immediately even with infrequent writes."""
+    def emit(self, record):
+        super().emit(record)
+        self.flush()
+
+
 def _setup_child_logging(log_file: str) -> None:
     """Configure logging in a spawned child process so output goes to the
-    shared pipeline log file (append mode) with the same format as the parent.
-    Uses line-buffered file to ensure progress messages appear immediately."""
+    shared pipeline log file (append mode) with the same format as the parent."""
     root = logging.getLogger()
     root.setLevel(logging.INFO)
     if not root.handlers:
-        _stream = open(log_file, "a", buffering=1)  # line-buffered
-        fh = logging.StreamHandler(_stream)
+        fh = _FlushFileHandler(log_file, mode="a")
         fh.setFormatter(logging.Formatter(_LOG_FMT, datefmt=_LOG_DATE))
         root.addHandler(fh)
         sh = logging.StreamHandler()

@@ -198,23 +198,36 @@ class TimestampExtractor:
             # Allow minor variations in whitespace
             parts = clean_text.split()
             if len(parts) >= 2:
-                # E.g. "2025-03-14 10:32:15"
-                # Sometimes EasyOCR outputs a third part for seconds, or squashes them
                 date_part = parts[0]
-                time_part = "".join(parts[1:]) # Rejoin 17 : 44 : 13 if split
+                time_part = "".join(parts[1:])
                 dt_str = f"{date_part} {time_part}"
                 parsed_time = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
             else:
                 parsed_time = datetime.strptime(clean_text, "%Y-%m-%d %H:%M:%S")
-                
-            # Validation: monotonically increasing check
+
+            # Year correction: OCR frequently misreads the leading "2" in "2026"
+            # as a letter (T→7, X→8, P→9 via the replacement table), producing
+            # years like 7026, 8026, 9026.  Clamp to current year if off by >1.
+            current_year = datetime.now().year
+            if abs(parsed_time.year - current_year) > 1:
+                parsed_time = parsed_time.replace(year=current_year)
+
+            # Monotonic & sanity checks
             if self._last_successful_time is not None:
                 time_diff = (parsed_time - self._last_successful_time).total_seconds()
-                
-                # Reject if it jumps backward by more than 2 seconds
+
+                # Reject backward jumps > 2 s
                 if time_diff < -2.0:
-                    logger.debug("[%s] Rejecting backward time jump: %s -> %s", 
+                    logger.debug("[%s] Rejecting backward time jump: %s -> %s",
                                  self.camera_id, self._last_successful_time, parsed_time)
+                    return None
+
+                # Reject implausible forward jumps > 1 hour — catches
+                # month/day corruption (e.g. "02" misread as "12")
+                if time_diff > 3600.0:
+                    logger.debug("[%s] Rejecting forward time jump (%.0fs): %s -> %s",
+                                 self.camera_id, time_diff,
+                                 self._last_successful_time, parsed_time)
                     return None
                     
             # Update state

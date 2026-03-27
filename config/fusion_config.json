@@ -2,6 +2,10 @@
     "timestamp_tolerance_s": 2,
     "default_distance_threshold_m": 2,
     "output_dir": "output/",
+    "expected_date_range": {
+        "start": "2026-02-23",
+        "end": "2026-03-02"
+    },
     "csv_format": {
         "columns": [
             "timestamp",
