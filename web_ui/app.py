@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from flask import Flask, render_template, request, redirect, url_for, session, send_from_directory, jsonify, send_file
 import os
 import signal
