@@ -52,6 +52,8 @@
                         <td class="align-middle">
                             {% if file.type == 'Video' %}
                             <span class="badge bg-primary">MP4 Video</span>
+                            {% elif file.type == 'Parquet' %}
+                            <span class="badge bg-warning text-dark">Parquet</span>
                             {% else %}
                             <span class="badge bg-success">CSV Data</span>
                             {% endif %}

@@ -170,6 +170,20 @@ def run_geo_transform(
 
     rows = transform_csv(input_csv, output_csv, affine)
 
+    # Also save as Parquet (much smaller, faster to load)
+    parquet_path = output_csv.replace(".csv", ".parquet")
+    try:
+        import pandas as pd
+        df = pd.read_csv(output_csv, low_memory=False)
+        df.to_parquet(parquet_path, index=False, engine="pyarrow")
+        parquet_name = Path(parquet_path).name
+        parquet_size_mb = round(os.path.getsize(parquet_path) / (1024 * 1024), 1)
+        logger.info("Saved parquet: %s (%.1f MB)", parquet_path, parquet_size_mb)
+    except Exception as exc:
+        logger.warning("Parquet save failed (CSV still OK): %s", exc)
+        parquet_name = None
+        parquet_size_mb = None
+
     logger.info(
         "Geo-transform: %d rows, reprojection %.2f m, saved %s",
         rows, rms_m, output_csv,
@@ -182,4 +196,6 @@ def run_geo_transform(
         "rows": rows,
         "output_path": output_csv,
         "affine": affine.tolist(),
+        "parquet_name": parquet_name,
+        "parquet_size_mb": parquet_size_mb,
     }

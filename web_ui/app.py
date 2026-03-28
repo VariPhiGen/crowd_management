@@ -1304,11 +1304,11 @@ def results():
     files = []
     if OUTPUT_DIR.exists():
         for file in OUTPUT_DIR.iterdir():
-            if file.is_file() and file.suffix in ['.csv', '.mp4']:
+            if file.is_file() and file.suffix in ['.csv', '.mp4', '.parquet']:
                 files.append({
                     'name': file.name,
                     'size': f"{file.stat().st_size / (1024*1024):.2f} MB",
-                    'type': 'Video' if file.suffix == '.mp4' else 'Data'
+                    'type': 'Video' if file.suffix == '.mp4' else ('Parquet' if file.suffix == '.parquet' else 'Data')
                 })
     return render_template('results.html', files=files)
 

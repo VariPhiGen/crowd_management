@@ -178,12 +178,17 @@
                     pollTimer = setTimeout(pollStatus, 3000);
                 } else if(data.ok === true){
                     const rows = data.rows ? data.rows.toLocaleString() : '?';
+                    let parquetLine = '';
+                    if(data.parquet_name){
+                        parquetLine = `<br>Parquet: <code>${data.parquet_name}</code> (${data.parquet_size_mb} MB) — <a href="/download/${data.parquet_name}">Download Parquet</a>`;
+                    }
                     showResult(`<div class="alert alert-success">
                         <strong>Done!</strong>
                         Transformed <strong>${rows}</strong> rows.
                         Reprojection error: <strong>${data.reprojection_error_m} m</strong>.
-                        <br>Saved as <code>${data.output_name}</code>
-                        — <a href="/download/${data.output_name}">Download</a>
+                        <br>CSV: <code>${data.output_name}</code>
+                        — <a href="/download/${data.output_name}">Download CSV</a>
+                        ${parquetLine}
                     </div>`);
                     submitBtn.disabled = false;
                     submitBtn.textContent = 'Validate & Transform';
@@ -202,6 +207,38 @@
                 pollTimer = setTimeout(pollStatus, 5000);
             });
     }
+
+    // On page load, check if a job is running or has completed
+    (function checkOnLoad(){
+        fetch('/api/geo-transform/status')
+            .then(r => r.json())
+            .then(data => {
+                if(data.status === 'running'){
+                    submitBtn.disabled = true;
+                    submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Processing...';
+                    pollStatus();
+                } else if(data.ok === true){
+                    const rows = data.rows ? data.rows.toLocaleString() : '?';
+                    let parquetLine = '';
+                    if(data.parquet_name){
+                        parquetLine = `<br>Parquet: <code>${data.parquet_name}</code> (${data.parquet_size_mb} MB) — <a href="/download/${data.parquet_name}">Download Parquet</a>`;
+                    }
+                    showResult(`<div class="alert alert-success">
+                        <strong>Done!</strong>
+                        Transformed <strong>${rows}</strong> rows.
+                        Reprojection error: <strong>${data.reprojection_error_m} m</strong>.
+                        <br>CSV: <code>${data.output_name}</code>
+                        — <a href="/download/${data.output_name}">Download CSV</a>
+                        ${parquetLine}
+                    </div>`);
+                } else if(data.ok === false){
+                    showResult(`<div class="alert alert-danger">
+                        <strong>Error:</strong> ${data.error}
+                    </div>`);
+                }
+            })
+            .catch(() => {});
+    })();
 
     submitBtn.addEventListener('click', function(){
         const file = document.getElementById('fusedFile');
