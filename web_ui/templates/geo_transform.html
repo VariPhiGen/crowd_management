@@ -29,36 +29,19 @@
         <code>longitude</code> columns to every crossing row.
     </p>
 
-    {% if result %}
-        {% if result.ok %}
-        <div class="alert alert-success">
-            <strong>Done!</strong>
-            Transformed <strong>{{ "{:,}".format(result.rows) }}</strong> rows.
-            Reprojection error: <strong>{{ result.reprojection_error_m }} m</strong>.
-            <br>Saved as <code>{{ result.output_name }}</code>
-            — <a href="/download/{{ result.output_name }}">Download</a>
-        </div>
-        {% else %}
-        <div class="alert alert-danger">
-            <strong>Error:</strong> {{ result.error }}
-        </div>
-        {% endif %}
-    {% endif %}
+    <div id="resultBox"></div>
 
-    <form method="POST" action="/geo-transform" id="geoForm">
+    <div id="geoForm">
 
         <!-- File selector -->
         <div class="card shadow-sm mb-4">
             <div class="card-header bg-white fw-semibold">1. Select Fused Crossings File</div>
             <div class="card-body">
                 {% if fused_files %}
-                <select name="fused_file" class="form-select" required>
+                <select id="fusedFile" class="form-select">
                     <option value="">— choose —</option>
                     {% for f in fused_files %}
-                    <option value="{{ f.name }}"
-                        {% if form_data.selected_file == f.name %}selected{% endif %}>
-                        {{ f.name }}  ({{ f.size }})
-                    </option>
+                    <option value="{{ f.name }}">{{ f.name }}  ({{ f.size }})</option>
                     {% endfor %}
                 </select>
                 {% else %}
@@ -90,10 +73,10 @@
                         {% for p in form_data.points %}
                         <tr class="ref-row">
                             <td class="align-middle text-center row-num">{{ loop.index }}</td>
-                            <td><input type="number" step="any" name="floor_x" class="form-control form-control-sm" value="{{ p.floor_x }}" placeholder="e.g. 1.0"></td>
-                            <td><input type="number" step="any" name="floor_y" class="form-control form-control-sm" value="{{ p.floor_y }}" placeholder="e.g. 1.0"></td>
-                            <td><input type="number" step="any" name="lat" class="form-control form-control-sm" value="{{ p.lat }}" placeholder="e.g. 35.12345"></td>
-                            <td><input type="number" step="any" name="lng" class="form-control form-control-sm" value="{{ p.lng }}" placeholder="e.g. 139.6789"></td>
+                            <td><input type="number" step="any" class="form-control form-control-sm fx" value="{{ p.floor_x }}" placeholder="e.g. 1.0"></td>
+                            <td><input type="number" step="any" class="form-control form-control-sm fy" value="{{ p.floor_y }}" placeholder="e.g. 1.0"></td>
+                            <td><input type="number" step="any" class="form-control form-control-sm la" value="{{ p.lat }}" placeholder="e.g. 35.12345"></td>
+                            <td><input type="number" step="any" class="form-control form-control-sm ln" value="{{ p.lng }}" placeholder="e.g. 139.6789"></td>
                             <td class="align-middle text-center">
                                 <button type="button" class="btn btn-sm btn-outline-danger remove-row-btn" title="Remove">&times;</button>
                             </td>
@@ -105,13 +88,13 @@
         </div>
 
         <div class="d-flex gap-2 mb-5">
-            <button type="submit" class="btn btn-primary px-4">
+            <button type="button" class="btn btn-primary px-4" id="submitBtn">
                 Validate &amp; Transform
             </button>
             <a href="/geo-transform" class="btn btn-outline-secondary">Reset</a>
         </div>
 
-    </form>
+    </div>
 
 </div>
 
@@ -120,6 +103,8 @@
 (function(){
     const tbody = document.querySelector('#refTable tbody');
     const addBtn = document.getElementById('addRowBtn');
+    const submitBtn = document.getElementById('submitBtn');
+    const resultBox = document.getElementById('resultBox');
 
     function renumber(){
         tbody.querySelectorAll('.ref-row').forEach((tr, i) => {
@@ -150,15 +135,116 @@
         tr.className = 'ref-row';
         tr.innerHTML = `
             <td class="align-middle text-center row-num">${rows.length+1}</td>
-            <td><input type="number" step="any" name="floor_x" class="form-control form-control-sm" placeholder="e.g. 1.0"></td>
-            <td><input type="number" step="any" name="floor_y" class="form-control form-control-sm" placeholder="e.g. 1.0"></td>
-            <td><input type="number" step="any" name="lat" class="form-control form-control-sm" placeholder="e.g. 35.12345"></td>
-            <td><input type="number" step="any" name="lng" class="form-control form-control-sm" placeholder="e.g. 139.6789"></td>
+            <td><input type="number" step="any" class="form-control form-control-sm fx" placeholder="e.g. 1.0"></td>
+            <td><input type="number" step="any" class="form-control form-control-sm fy" placeholder="e.g. 1.0"></td>
+            <td><input type="number" step="any" class="form-control form-control-sm la" placeholder="e.g. 35.12345"></td>
+            <td><input type="number" step="any" class="form-control form-control-sm ln" placeholder="e.g. 139.6789"></td>
             <td class="align-middle text-center">
                 <button type="button" class="btn btn-sm btn-outline-danger remove-row-btn" title="Remove">&times;</button>
             </td>`;
         tbody.appendChild(tr);
         attachRemove(tr.querySelector('.remove-row-btn'));
+    });
+
+    function showResult(html){ resultBox.innerHTML = html; }
+
+    function collectPoints(){
+        const pts = [];
+        tbody.querySelectorAll('.ref-row').forEach(tr => {
+            const fx = tr.querySelector('.fx').value.trim();
+            const fy = tr.querySelector('.fy').value.trim();
+            const la = tr.querySelector('.la').value.trim();
+            const ln = tr.querySelector('.ln').value.trim();
+            if(fx && fy && la && ln){
+                pts.push({floor_x: fx, floor_y: fy, lat: la, lng: ln});
+            }
+        });
+        return pts;
+    }
+
+    let pollTimer = null;
+
+    function pollStatus(){
+        fetch('/api/geo-transform/status')
+            .then(r => r.json())
+            .then(data => {
+                if(data.status === 'running'){
+                    showResult(`<div class="alert alert-info">
+                        <div class="d-flex align-items-center">
+                            <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                            <strong>Processing...</strong>&nbsp;Transforming <code>${data.file}</code>. Large files may take 2–4 minutes.
+                        </div>
+                    </div>`);
+                    pollTimer = setTimeout(pollStatus, 3000);
+                } else if(data.ok === true){
+                    const rows = data.rows ? data.rows.toLocaleString() : '?';
+                    showResult(`<div class="alert alert-success">
+                        <strong>Done!</strong>
+                        Transformed <strong>${rows}</strong> rows.
+                        Reprojection error: <strong>${data.reprojection_error_m} m</strong>.
+                        <br>Saved as <code>${data.output_name}</code>
+                        — <a href="/download/${data.output_name}">Download</a>
+                    </div>`);
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Validate & Transform';
+                } else if(data.ok === false){
+                    showResult(`<div class="alert alert-danger">
+                        <strong>Error:</strong> ${data.error}
+                    </div>`);
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Validate & Transform';
+                } else {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Validate & Transform';
+                }
+            })
+            .catch(() => {
+                pollTimer = setTimeout(pollStatus, 5000);
+            });
+    }
+
+    submitBtn.addEventListener('click', function(){
+        const file = document.getElementById('fusedFile');
+        if(!file || !file.value){
+            showResult('<div class="alert alert-danger">Please select a fused crossings CSV.</div>');
+            return;
+        }
+        const pts = collectPoints();
+        if(pts.length < 3){
+            showResult(`<div class="alert alert-danger">Need at least 3 valid reference points, got ${pts.length}.</div>`);
+            return;
+        }
+
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Starting...';
+        showResult(`<div class="alert alert-info">
+            <div class="d-flex align-items-center">
+                <div class="spinner-border spinner-border-sm me-2" role="status"></div>
+                <strong>Starting geo-transform...</strong>
+            </div>
+        </div>`);
+
+        fetch('/api/geo-transform', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({fused_file: file.value, points: pts})
+        })
+        .then(r => r.json())
+        .then(data => {
+            if(data.ok && data.status === 'started'){
+                submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Processing...';
+                pollTimer = setTimeout(pollStatus, 2000);
+            } else {
+                showResult(`<div class="alert alert-danger"><strong>Error:</strong> ${data.error}</div>`);
+                submitBtn.disabled = false;
+                submitBtn.textContent = 'Validate & Transform';
+            }
+        })
+        .catch(err => {
+            showResult(`<div class="alert alert-danger"><strong>Error:</strong> ${err.message}</div>`);
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Validate & Transform';
+        });
     });
 })();
 </script>

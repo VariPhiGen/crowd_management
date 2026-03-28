@@ -1331,14 +1331,9 @@ def _list_fused_csvs() -> list[dict]:
     return out
 
 
-@app.route('/geo-transform', methods=['GET', 'POST'])
+@app.route('/geo-transform', methods=['GET'])
 def geo_transform_page():
-    import sys as _sys
-    _sys.path.insert(0, str(PROJECT_ROOT))
-    from pipeline.geo_transform import GeoRefPoint, run_geo_transform
-
     fused_files = _list_fused_csvs()
-    result = None
     form_data = {
         "selected_file": "",
         "points": [
@@ -1347,48 +1342,87 @@ def geo_transform_page():
             {"floor_x": "", "floor_y": "", "lat": "", "lng": ""},
         ],
     }
-
-    if request.method == 'POST':
-        selected = request.form.get('fused_file', '')
-        form_data["selected_file"] = selected
-
-        floor_xs = request.form.getlist('floor_x')
-        floor_ys = request.form.getlist('floor_y')
-        lats = request.form.getlist('lat')
-        lngs = request.form.getlist('lng')
-
-        points_raw = []
-        form_points = []
-        for fx, fy, la, ln in zip(floor_xs, floor_ys, lats, lngs):
-            form_points.append({"floor_x": fx, "floor_y": fy, "lat": la, "lng": ln})
-            fx_s, fy_s, la_s, ln_s = fx.strip(), fy.strip(), la.strip(), ln.strip()
-            if fx_s and fy_s and la_s and ln_s:
-                try:
-                    points_raw.append(GeoRefPoint(
-                        float(fx_s), float(fy_s), float(la_s), float(ln_s)
-                    ))
-                except ValueError:
-                    pass
-        form_data["points"] = form_points
-
-        if not selected:
-            result = {"ok": False, "error": "Please select a fused crossings CSV."}
-        elif len(points_raw) < 3:
-            result = {"ok": False, "error": f"Need at least 3 valid reference points, got {len(points_raw)}."}
-        else:
-            input_csv = str(OUTPUT_DIR / selected)
-            stem = selected.replace(".csv", "")
-            output_csv = str(OUTPUT_DIR / f"{stem}_lat_long.csv")
-            result = run_geo_transform(points_raw, input_csv, output_csv)
-            if result["ok"]:
-                result["output_name"] = Path(output_csv).name
-
     return render_template(
         'geo_transform.html',
         fused_files=fused_files,
-        result=result,
+        result=None,
         form_data=form_data,
     )
+
+
+@app.route('/api/geo-transform', methods=['POST'])
+def api_geo_transform():
+    """Run geo-transform as a background subprocess, return immediately."""
+    import sys as _sys
+    data = request.get_json(force=True)
+    selected = data.get("fused_file", "")
+    points = data.get("points", [])
+
+    if not selected:
+        return jsonify({"ok": False, "error": "Please select a fused crossings CSV."})
+
+    valid_pts = []
+    for p in points:
+        try:
+            fx = float(p.get("floor_x", ""))
+            fy = float(p.get("floor_y", ""))
+            la = float(p.get("lat", ""))
+            ln = float(p.get("lng", ""))
+            valid_pts.append({"floor_x": fx, "floor_y": fy, "lat": la, "lng": ln})
+        except (ValueError, TypeError):
+            pass
+
+    if len(valid_pts) < 3:
+        return jsonify({"ok": False, "error": f"Need at least 3 valid reference points, got {len(valid_pts)}."})
+
+    input_csv = str(OUTPUT_DIR / selected)
+    if not os.path.isfile(input_csv):
+        return jsonify({"ok": False, "error": f"File not found: {selected}"})
+
+    stem = selected.replace(".csv", "")
+    output_csv = str(OUTPUT_DIR / f"{stem}_lat_long.csv")
+    status_file = str(OUTPUT_DIR / ".geo_transform_status.json")
+
+    # Write status "running"
+    with open(status_file, "w") as f:
+        json.dump({"status": "running", "file": selected}, f)
+
+    # Build a small inline Python script to run in background
+    pts_json = json.dumps(valid_pts)
+    python_exec = _sys.executable
+    script = f"""
+import sys, json, os
+sys.path.insert(0, {str(PROJECT_ROOT)!r})
+from pipeline.geo_transform import GeoRefPoint, run_geo_transform
+pts = [GeoRefPoint(**p) for p in json.loads({pts_json!r})]
+result = run_geo_transform(pts, {input_csv!r}, {output_csv!r})
+if result["ok"]:
+    result["output_name"] = os.path.basename({output_csv!r})
+with open({status_file!r}, "w") as f:
+    json.dump(result, f)
+"""
+    proc = subprocess.Popen(
+        [python_exec, "-u", "-c", script],
+        cwd=str(PROJECT_ROOT),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    return jsonify({"ok": True, "status": "started", "pid": proc.pid})
+
+
+@app.route('/api/geo-transform/status')
+def api_geo_transform_status():
+    """Poll the background geo-transform job status."""
+    status_file = OUTPUT_DIR / ".geo_transform_status.json"
+    if not status_file.exists():
+        return jsonify({"status": "idle"})
+    try:
+        with open(status_file) as f:
+            data = json.load(f)
+        return jsonify(data)
+    except Exception:
+        return jsonify({"status": "idle"})
 
 @app.route('/download/<filename>')
 def download_file(filename):
