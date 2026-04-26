@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Dashboard{% endblock %} — Crimenabi</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+  <link href="/static/css/style.css" rel="stylesheet">
+  {% block extra_css %}{% endblock %}
+</head>
+<body class="{% block body_class %}{% endblock %}">
+
+<div class="app-layout">
+
+  <!-- ══════════════════════════════ SIDEBAR ══════════════════════════════ -->
+  <aside id="sidebar">
+
+    <div class="sb-logo">
+      <div class="sb-logo-icon"><i class="bi bi-eye-fill"></i></div>
+      <div>
+        <div class="sb-logo-text">Crimenabi</div>
+        <div class="sb-logo-sub">Pipeline Intelligence</div>
+      </div>
+    </div>
+
+    <nav class="sb-nav">
+
+      <div class="sb-section-label">Operations</div>
+
+      <a href="/" class="sb-link {% if active_page == 'dashboard' %}active{% endif %}">
+        <i class="bi bi-grid-1x2-fill"></i> Dashboard
+      </a>
+      <a href="/results" class="sb-link {% if active_page == 'results' %}active{% endif %}">
+        <i class="bi bi-file-earmark-bar-graph-fill"></i> Results
+      </a>
+      <a href="/geo-transform" class="sb-link {% if active_page == 'geo_transform' %}active{% endif %}">
+        <i class="bi bi-geo-alt-fill"></i> Geo-Transform
+      </a>
+
+      {% if sidebar_cameras %}
+      <div class="sb-divider"></div>
+      <div class="sb-section-label">Cameras</div>
+      {% for cam in sidebar_cameras %}
+      <a href="/camera/{{ cam.id }}"
+         class="sb-link sb-link-sub {% if active_page == 'camera_' + cam.id %}active{% endif %}">
+        <i class="bi bi-camera-video{% if active_page == 'camera_' + cam.id %}-fill{% endif %}"></i>
+        {{ cam.id }} <span class="ms-1 text-xs" style="opacity:0.5;">{{ cam.name }}</span>
+      </a>
+      {% endfor %}
+      {% endif %}
+
+    </nav>
+
+    <div class="sb-footer">
+      <div class="sb-user">
+        <div class="sb-avatar">A</div>
+        <div class="sb-user-info">
+          <div class="sb-user-name">Admin</div>
+          <div class="sb-user-role">Pipeline Manager</div>
+        </div>
+        <a href="/logout" class="sb-logout" title="Sign out">
+          <i class="bi bi-box-arrow-right" style="font-size:1rem;"></i>
+        </a>
+      </div>
+    </div>
+
+  </aside>
+  <!-- ════════════════════════════ END SIDEBAR ════════════════════════════ -->
+
+  <!-- Main wrapper -->
+  <div class="main-content">
+
+    <!-- ══════════════════════════ TOPBAR ══════════════════════════════ -->
+    <header class="topbar {% block topbar_class %}{% endblock %}">
+      <div class="topbar-breadcrumb">
+        {% block breadcrumb %}
+        <a href="/" class="crumb" style="text-decoration:none; color:inherit;">Crimenabi</a>
+        <span class="crumb-sep"><i class="bi bi-chevron-right" style="font-size:0.6rem;"></i></span>
+        <span class="crumb-current">{% block page_heading %}Dashboard{% endblock %}</span>
+        {% endblock %}
+      </div>
+      <div class="topbar-right">
+        {% block topbar_actions %}{% endblock %}
+        <div class="topbar-clock" id="topbar-clock"></div>
+      </div>
+    </header>
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+
+    <!-- Page content -->
+    <main class="page-content fade-in">
+      {% block content %}{% endblock %}
+    </main>
+
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+(function() {
+  // Live clock
+  const el = document.getElementById('topbar-clock');
+  if (el) {
+    const tick = () => {
+      el.textContent = new Date().toLocaleTimeString('en-US', {hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false});
+    };
+    tick();
+    setInterval(tick, 1000);
+  }
+
+  // Camera chip selection (dashboard)
+  document.querySelectorAll('.cam-chip').forEach(chip => {
+    const cb = chip.querySelector('input[type=checkbox]');
+    if (!cb) return;
+    if (cb.checked) chip.classList.add('selected');
+    chip.addEventListener('click', () => {
+      cb.checked = !cb.checked;
+      chip.classList.toggle('selected', cb.checked);
+    });
+  });
+})();
+</script>
+{% block extra_js %}{% endblock %}
+</body>
+</html>

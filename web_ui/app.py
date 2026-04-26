@@ -162,6 +162,15 @@ def get_cameras():
         print(f"Error reading cameras.json: {e}")
         return []
 
+# --- Global template context ---
+@app.context_processor
+def inject_sidebar():
+    try:
+        cameras = get_cameras()
+    except Exception:
+        cameras = []
+    return {"sidebar_cameras": cameras}
+
 # --- Authentication Middleware ---
 @app.before_request
 def require_login():

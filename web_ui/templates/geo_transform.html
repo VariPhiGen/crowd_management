@@ -1,289 +1,283 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Geo-Transform — Add Lat/Long</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="/static/css/style.css" rel="stylesheet">
-</head>
-<body class="bg-light">
+{% extends 'base.html' %}
+{% block title %}Geo-Transform{% endblock %}
+{% block page_heading %}Geo-Transform{% endblock %}
+{% set active_page = 'geo_transform' %}
 
-<nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
-    <div class="container">
-        <a class="navbar-brand" href="/">Crimenabi</a>
-        <div class="d-flex">
-            <a href="/" class="btn btn-outline-light me-2 badge">Dashboard</a>
-            <a href="/results" class="btn btn-outline-light me-2 badge">Results</a>
-            <a href="/logout" class="btn btn-danger badge">Logout</a>
-        </div>
+{% block content %}
+
+<div class="row g-4" style="max-width:960px;">
+
+  <div class="col-12">
+    <div class="alert alert-info">
+      <i class="bi bi-info-circle-fill"></i>
+      <div>Provide 3–6 reference points mapping floor coordinates (metres) to GPS.
+      An affine transform is fitted and <code>latitude</code> / <code>longitude</code> columns are added to every crossing row.</div>
     </div>
-</nav>
+  </div>
 
-<div class="container" style="max-width:900px;">
+  <div class="col-12" id="resultBox"></div>
 
-    <h4 class="mb-3">Geo-Transform: Add Latitude / Longitude</h4>
-    <p class="text-muted">
-        Provide 3–6 reference points mapping floor coordinates (metres) to GPS.
-        The system fits an affine transform and adds <code>latitude</code> /
-        <code>longitude</code> columns to every crossing row.
-    </p>
+  <div id="geoForm">
 
-    <div id="resultBox"></div>
-
-    <div id="geoForm">
-
-        <!-- File selector -->
-        <div class="card shadow-sm mb-4">
-            <div class="card-header bg-white fw-semibold">1. Select Fused Crossings File</div>
-            <div class="card-body">
-                {% if fused_files %}
-                <select id="fusedFile" class="form-select">
-                    <option value="">— choose —</option>
-                    {% for f in fused_files %}
-                    <option value="{{ f.name }}">{{ f.name }}  ({{ f.size }})</option>
-                    {% endfor %}
-                </select>
-                {% else %}
-                <p class="text-muted mb-0">No fused crossing CSVs found in <code>output/</code>.
-                   Run fusion first.</p>
-                {% endif %}
-            </div>
+    <!-- Step 1: File -->
+    <div class="col-12 mb-3">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-header-title">
+            <span class="badge badge-primary me-1">1</span> Select Fused Crossings File
+          </div>
         </div>
-
-        <!-- Reference points -->
-        <div class="card shadow-sm mb-4">
-            <div class="card-header bg-white fw-semibold d-flex justify-content-between align-items-center">
-                <span>2. Reference Points (min 3, max 6)</span>
-                <button type="button" class="btn btn-sm btn-outline-primary" id="addRowBtn">+ Add Point</button>
-            </div>
-            <div class="card-body p-0">
-                <table class="table table-bordered mb-0" id="refTable">
-                    <thead class="table-light">
-                        <tr>
-                            <th style="width:5%">#</th>
-                            <th>Floor X (m)</th>
-                            <th>Floor Y (m)</th>
-                            <th>Latitude</th>
-                            <th>Longitude</th>
-                            <th style="width:5%"></th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for p in form_data.points %}
-                        <tr class="ref-row">
-                            <td class="align-middle text-center row-num">{{ loop.index }}</td>
-                            <td><input type="number" step="any" class="form-control form-control-sm fx" value="{{ p.floor_x }}" placeholder="e.g. 1.0"></td>
-                            <td><input type="number" step="any" class="form-control form-control-sm fy" value="{{ p.floor_y }}" placeholder="e.g. 1.0"></td>
-                            <td><input type="number" step="any" class="form-control form-control-sm la" value="{{ p.lat }}" placeholder="e.g. 35.12345"></td>
-                            <td><input type="number" step="any" class="form-control form-control-sm ln" value="{{ p.lng }}" placeholder="e.g. 139.6789"></td>
-                            <td class="align-middle text-center">
-                                <button type="button" class="btn btn-sm btn-outline-danger remove-row-btn" title="Remove">&times;</button>
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
+        <div class="card-body card-body-sm">
+          {% if fused_files %}
+          <select id="fusedFile" class="form-select">
+            <option value="">— choose file —</option>
+            {% for f in fused_files %}
+            <option value="{{ f.name }}">{{ f.name }} ({{ f.size }})</option>
+            {% endfor %}
+          </select>
+          {% else %}
+          <div class="text-muted text-sm">
+            <i class="bi bi-exclamation-circle me-1"></i>
+            No fused crossing CSVs found in <code>output/</code>. Run fusion first.
+          </div>
+          {% endif %}
         </div>
-
-        <div class="d-flex gap-2 mb-5">
-            <button type="button" class="btn btn-primary px-4" id="submitBtn">
-                Validate &amp; Transform
-            </button>
-            <a href="/geo-transform" class="btn btn-outline-secondary">Reset</a>
-        </div>
-
+      </div>
     </div>
 
+    <!-- Step 2: Reference Points -->
+    <div class="col-12 mb-3">
+      <div class="card">
+        <div class="card-header">
+          <div class="card-header-title">
+            <span class="badge badge-primary me-1">2</span> Reference Points
+            <span class="text-muted fw-normal ms-1" style="font-size:0.75rem;">min 3, max 6</span>
+          </div>
+          <button type="button" class="btn btn-sm btn-outline-primary" id="addRowBtn">
+            <i class="bi bi-plus-lg"></i> Add Point
+          </button>
+        </div>
+        <div class="table-responsive p-0">
+          <table class="table" id="refTable">
+            <thead>
+              <tr>
+                <th style="width:40px">#</th>
+                <th>Floor X (m)</th>
+                <th>Floor Y (m)</th>
+                <th>Latitude</th>
+                <th>Longitude</th>
+                <th style="width:40px"></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for p in form_data.points %}
+              <tr class="ref-row">
+                <td class="text-center fw-semibold row-num">{{ loop.index }}</td>
+                <td><input type="number" step="any" class="form-control form-control-sm fx" value="{{ p.floor_x }}" placeholder="1.0"></td>
+                <td><input type="number" step="any" class="form-control form-control-sm fy" value="{{ p.floor_y }}" placeholder="1.0"></td>
+                <td><input type="number" step="any" class="form-control form-control-sm la" value="{{ p.lat }}" placeholder="35.12345"></td>
+                <td><input type="number" step="any" class="form-control form-control-sm ln" value="{{ p.lng }}" placeholder="139.6789"></td>
+                <td class="text-center">
+                  <button type="button" class="btn btn-xs btn-outline-danger remove-row-btn">
+                    <i class="bi bi-x-lg"></i>
+                  </button>
+                </td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 3: Submit -->
+    <div class="col-12">
+      <div class="d-flex gap-2">
+        <button type="button" class="btn btn-primary" id="submitBtn">
+          <i class="bi bi-geo-alt-fill"></i> Validate &amp; Transform
+        </button>
+        <a href="/geo-transform" class="btn btn-secondary">
+          <i class="bi bi-arrow-counterclockwise"></i> Reset
+        </a>
+      </div>
+    </div>
+
+  </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+{% endblock %}
+
+{% block extra_js %}
 <script>
 (function(){
-    const tbody = document.querySelector('#refTable tbody');
-    const addBtn = document.getElementById('addRowBtn');
-    const submitBtn = document.getElementById('submitBtn');
-    const resultBox = document.getElementById('resultBox');
+  const tbody    = document.querySelector('#refTable tbody');
+  const addBtn   = document.getElementById('addRowBtn');
+  const submitBtn = document.getElementById('submitBtn');
+  const resultBox = document.getElementById('resultBox');
 
-    function renumber(){
-        tbody.querySelectorAll('.ref-row').forEach((tr, i) => {
-            tr.querySelector('.row-num').textContent = i + 1;
-        });
-    }
-
-    function attachRemove(btn){
-        btn.addEventListener('click', function(){
-            if(tbody.querySelectorAll('.ref-row').length <= 3){
-                alert('Minimum 3 reference points required.');
-                return;
-            }
-            btn.closest('tr').remove();
-            renumber();
-        });
-    }
-
-    document.querySelectorAll('.remove-row-btn').forEach(attachRemove);
-
-    addBtn.addEventListener('click', function(){
-        const rows = tbody.querySelectorAll('.ref-row');
-        if(rows.length >= 6){
-            alert('Maximum 6 reference points.');
-            return;
-        }
-        const tr = document.createElement('tr');
-        tr.className = 'ref-row';
-        tr.innerHTML = `
-            <td class="align-middle text-center row-num">${rows.length+1}</td>
-            <td><input type="number" step="any" class="form-control form-control-sm fx" placeholder="e.g. 1.0"></td>
-            <td><input type="number" step="any" class="form-control form-control-sm fy" placeholder="e.g. 1.0"></td>
-            <td><input type="number" step="any" class="form-control form-control-sm la" placeholder="e.g. 35.12345"></td>
-            <td><input type="number" step="any" class="form-control form-control-sm ln" placeholder="e.g. 139.6789"></td>
-            <td class="align-middle text-center">
-                <button type="button" class="btn btn-sm btn-outline-danger remove-row-btn" title="Remove">&times;</button>
-            </td>`;
-        tbody.appendChild(tr);
-        attachRemove(tr.querySelector('.remove-row-btn'));
+  function renumber() {
+    tbody.querySelectorAll('.ref-row').forEach((tr, i) => {
+      tr.querySelector('.row-num').textContent = i + 1;
     });
+  }
 
-    function showResult(html){ resultBox.innerHTML = html; }
+  function attachRemove(btn) {
+    btn.addEventListener('click', () => {
+      if (tbody.querySelectorAll('.ref-row').length <= 3) {
+        alert('Minimum 3 reference points required.'); return;
+      }
+      btn.closest('tr').remove();
+      renumber();
+    });
+  }
 
-    function collectPoints(){
-        const pts = [];
-        tbody.querySelectorAll('.ref-row').forEach(tr => {
-            const fx = tr.querySelector('.fx').value.trim();
-            const fy = tr.querySelector('.fy').value.trim();
-            const la = tr.querySelector('.la').value.trim();
-            const ln = tr.querySelector('.ln').value.trim();
-            if(fx && fy && la && ln){
-                pts.push({floor_x: fx, floor_y: fy, lat: la, lng: ln});
-            }
-        });
-        return pts;
-    }
+  document.querySelectorAll('.remove-row-btn').forEach(attachRemove);
 
-    let pollTimer = null;
+  addBtn.addEventListener('click', () => {
+    const rows = tbody.querySelectorAll('.ref-row');
+    if (rows.length >= 6) { alert('Maximum 6 reference points.'); return; }
+    const tr = document.createElement('tr');
+    tr.className = 'ref-row';
+    tr.innerHTML = `
+      <td class="text-center fw-semibold row-num">${rows.length + 1}</td>
+      <td><input type="number" step="any" class="form-control form-control-sm fx" placeholder="1.0"></td>
+      <td><input type="number" step="any" class="form-control form-control-sm fy" placeholder="1.0"></td>
+      <td><input type="number" step="any" class="form-control form-control-sm la" placeholder="35.12345"></td>
+      <td><input type="number" step="any" class="form-control form-control-sm ln" placeholder="139.6789"></td>
+      <td class="text-center">
+        <button type="button" class="btn btn-xs btn-outline-danger remove-row-btn">
+          <i class="bi bi-x-lg"></i>
+        </button>
+      </td>`;
+    tbody.appendChild(tr);
+    attachRemove(tr.querySelector('.remove-row-btn'));
+  });
 
-    function pollStatus(){
-        fetch('/api/geo-transform/status')
-            .then(r => r.json())
-            .then(data => {
-                if(data.status === 'running'){
-                    showResult(`<div class="alert alert-info">
-                        <div class="d-flex align-items-center">
-                            <div class="spinner-border spinner-border-sm me-2" role="status"></div>
-                            <strong>Processing...</strong>&nbsp;Transforming <code>${data.file}</code>. Large files may take 2–4 minutes.
-                        </div>
-                    </div>`);
-                    pollTimer = setTimeout(pollStatus, 3000);
-                } else if(data.ok === true){
-                    const rows = data.rows ? data.rows.toLocaleString() : '?';
-                    let parquetLine = '';
-                    if(data.parquet_name){
-                        parquetLine = `<br>Parquet: <code>${data.parquet_name}</code> (${data.parquet_size_mb} MB) — <a href="/download/${data.parquet_name}">Download Parquet</a>`;
-                    }
-                    showResult(`<div class="alert alert-success">
-                        <strong>Done!</strong>
-                        Transformed <strong>${rows}</strong> rows.
-                        Reprojection error: <strong>${data.reprojection_error_m} m</strong>.
-                        <br>CSV: <code>${data.output_name}</code>
-                        — <a href="/download/${data.output_name}">Download CSV</a>
-                        ${parquetLine}
-                    </div>`);
-                    submitBtn.disabled = false;
-                    submitBtn.textContent = 'Validate & Transform';
-                } else if(data.ok === false){
-                    showResult(`<div class="alert alert-danger">
-                        <strong>Error:</strong> ${data.error}
-                    </div>`);
-                    submitBtn.disabled = false;
-                    submitBtn.textContent = 'Validate & Transform';
-                } else {
-                    submitBtn.disabled = false;
-                    submitBtn.textContent = 'Validate & Transform';
-                }
-            })
-            .catch(() => {
-                pollTimer = setTimeout(pollStatus, 5000);
-            });
-    }
+  function showResult(html) { resultBox.innerHTML = html; window.scrollTo(0,0); }
 
-    // On page load, check if a job is running or has completed
-    (function checkOnLoad(){
-        fetch('/api/geo-transform/status')
-            .then(r => r.json())
-            .then(data => {
-                if(data.status === 'running'){
-                    submitBtn.disabled = true;
-                    submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Processing...';
-                    pollStatus();
-                } else if(data.ok === true){
-                    const rows = data.rows ? data.rows.toLocaleString() : '?';
-                    let parquetLine = '';
-                    if(data.parquet_name){
-                        parquetLine = `<br>Parquet: <code>${data.parquet_name}</code> (${data.parquet_size_mb} MB) — <a href="/download/${data.parquet_name}">Download Parquet</a>`;
-                    }
-                    showResult(`<div class="alert alert-success">
-                        <strong>Done!</strong>
-                        Transformed <strong>${rows}</strong> rows.
-                        Reprojection error: <strong>${data.reprojection_error_m} m</strong>.
-                        <br>CSV: <code>${data.output_name}</code>
-                        — <a href="/download/${data.output_name}">Download CSV</a>
-                        ${parquetLine}
-                    </div>`);
-                } else if(data.ok === false){
-                    showResult(`<div class="alert alert-danger">
-                        <strong>Error:</strong> ${data.error}
-                    </div>`);
-                }
-            })
-            .catch(() => {});
-    })();
+  function collectPoints() {
+    const pts = [];
+    tbody.querySelectorAll('.ref-row').forEach(tr => {
+      const fx = tr.querySelector('.fx').value.trim();
+      const fy = tr.querySelector('.fy').value.trim();
+      const la = tr.querySelector('.la').value.trim();
+      const ln = tr.querySelector('.ln').value.trim();
+      if (fx && fy && la && ln) pts.push({floor_x: fx, floor_y: fy, lat: la, lng: ln});
+    });
+    return pts;
+  }
 
-    submitBtn.addEventListener('click', function(){
-        const file = document.getElementById('fusedFile');
-        if(!file || !file.value){
-            showResult('<div class="alert alert-danger">Please select a fused crossings CSV.</div>');
-            return;
-        }
-        const pts = collectPoints();
-        if(pts.length < 3){
-            showResult(`<div class="alert alert-danger">Need at least 3 valid reference points, got ${pts.length}.</div>`);
-            return;
-        }
+  let pollTimer = null;
 
-        submitBtn.disabled = true;
-        submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Starting...';
-        showResult(`<div class="alert alert-info">
-            <div class="d-flex align-items-center">
-                <div class="spinner-border spinner-border-sm me-2" role="status"></div>
-                <strong>Starting geo-transform...</strong>
+  function pollStatus() {
+    fetch('/api/geo-transform/status')
+      .then(r => r.json())
+      .then(data => {
+        if (data.status === 'running') {
+          showResult(`<div class="alert alert-info mb-4">
+            <span class="spinner-border spinner-border-sm me-2 flex-shrink-0"></span>
+            <span>Processing <code>${data.file}</code>… Large files may take 2–4 minutes.</span>
+          </div>`);
+          pollTimer = setTimeout(pollStatus, 3000);
+        } else if (data.ok === true) {
+          const rows = data.rows ? data.rows.toLocaleString() : '?';
+          let parquetLine = data.parquet_name
+            ? `<br>Parquet: <code>${data.parquet_name}</code> (${data.parquet_size_mb} MB) — <a href="/download/${data.parquet_name}">Download</a>`
+            : '';
+          showResult(`<div class="alert alert-success mb-4">
+            <i class="bi bi-check-circle-fill"></i>
+            <div>
+              <strong>Done!</strong> Transformed <strong>${rows}</strong> rows.
+              Reprojection error: <strong>${data.reprojection_error_m} m</strong>
+              <br>CSV: <code>${data.output_name}</code> — <a href="/download/${data.output_name}">Download CSV</a>
+              ${parquetLine}
             </div>
-        </div>`);
+          </div>`);
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<i class="bi bi-geo-alt-fill"></i> Validate &amp; Transform';
+        } else if (data.ok === false) {
+          showResult(`<div class="alert alert-danger mb-4">
+            <i class="bi bi-exclamation-triangle-fill"></i>
+            <span><strong>Error:</strong> ${data.error}</span>
+          </div>`);
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<i class="bi bi-geo-alt-fill"></i> Validate &amp; Transform';
+        } else {
+          submitBtn.disabled = false;
+          submitBtn.innerHTML = '<i class="bi bi-geo-alt-fill"></i> Validate &amp; Transform';
+        }
+      })
+      .catch(() => { pollTimer = setTimeout(pollStatus, 5000); });
+  }
 
-        fetch('/api/geo-transform', {
-            method: 'POST',
-            headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({fused_file: file.value, points: pts})
-        })
-        .then(r => r.json())
-        .then(data => {
-            if(data.ok && data.status === 'started'){
-                submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span> Processing...';
-                pollTimer = setTimeout(pollStatus, 2000);
-            } else {
-                showResult(`<div class="alert alert-danger"><strong>Error:</strong> ${data.error}</div>`);
-                submitBtn.disabled = false;
-                submitBtn.textContent = 'Validate & Transform';
-            }
-        })
-        .catch(err => {
-            showResult(`<div class="alert alert-danger"><strong>Error:</strong> ${err.message}</div>`);
-            submitBtn.disabled = false;
-            submitBtn.textContent = 'Validate & Transform';
-        });
+  // Check on load
+  (function checkOnLoad() {
+    fetch('/api/geo-transform/status')
+      .then(r => r.json())
+      .then(data => {
+        if (data.status === 'running') {
+          submitBtn.disabled = true;
+          submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Processing…';
+          pollStatus();
+        } else if (data.ok === true) {
+          const rows = data.rows ? data.rows.toLocaleString() : '?';
+          let parquetLine = data.parquet_name
+            ? `<br>Parquet: <code>${data.parquet_name}</code> — <a href="/download/${data.parquet_name}">Download</a>`
+            : '';
+          showResult(`<div class="alert alert-success mb-4">
+            <i class="bi bi-check-circle-fill"></i>
+            <div>Last run done. ${rows} rows. Error: ${data.reprojection_error_m} m.
+            <br><a href="/download/${data.output_name}">${data.output_name}</a>${parquetLine}</div>
+          </div>`);
+        } else if (data.ok === false) {
+          showResult(`<div class="alert alert-danger mb-4">
+            <i class="bi bi-exclamation-triangle-fill"></i>
+            <span>Last run failed: ${data.error}</span>
+          </div>`);
+        }
+      })
+      .catch(() => {});
+  })();
+
+  submitBtn.addEventListener('click', () => {
+    const file = document.getElementById('fusedFile');
+    if (!file || !file.value) {
+      showResult('<div class="alert alert-danger mb-4"><i class="bi bi-exclamation-triangle-fill"></i> <span>Please select a fused crossings CSV.</span></div>');
+      return;
+    }
+    const pts = collectPoints();
+    if (pts.length < 3) {
+      showResult(`<div class="alert alert-danger mb-4"><i class="bi bi-exclamation-triangle-fill"></i> <span>Need at least 3 valid reference points, got ${pts.length}.</span></div>`);
+      return;
+    }
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Starting…';
+    showResult(`<div class="alert alert-info mb-4">
+      <span class="spinner-border spinner-border-sm me-2 flex-shrink-0"></span>
+      <span>Starting geo-transform…</span>
+    </div>`);
+    fetch('/api/geo-transform', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({fused_file: file.value, points: pts})
+    })
+    .then(r => r.json())
+    .then(data => {
+      if (data.ok && data.status === 'started') {
+        submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Processing…';
+        pollTimer = setTimeout(pollStatus, 2000);
+      } else {
+        showResult(`<div class="alert alert-danger mb-4"><i class="bi bi-exclamation-triangle-fill"></i> <span><strong>Error:</strong> ${data.error}</span></div>`);
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = '<i class="bi bi-geo-alt-fill"></i> Validate &amp; Transform';
+      }
+    })
+    .catch(err => {
+      showResult(`<div class="alert alert-danger mb-4"><i class="bi bi-exclamation-triangle-fill"></i> <span>${err.message}</span></div>`);
+      submitBtn.disabled = false;
+      submitBtn.innerHTML = '<i class="bi bi-geo-alt-fill"></i> Validate &amp; Transform';
     });
+  });
 })();
 </script>
-</body>
-</html>
+{% endblock %}

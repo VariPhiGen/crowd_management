@@ -1,39 +1,66 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Crimenabi - Login</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="/static/css/style.css" rel="stylesheet">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sign In — Crimenabi</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
+  <link href="/static/css/style.css" rel="stylesheet">
 </head>
 <body>
 
-<div class="login-container">
-    <div class="glass-card">
-        <div class="text-center mb-4">
-            <h3 class="fw-bold mb-1">Crimenabi</h3>
-            <p class="text-white-50">Pipeline Management Interface</p>
-        </div>
+<div class="login-page">
+  <div class="login-card">
+
+    <!-- Logo -->
+    <div class="text-center mb-4">
+      <div class="d-inline-flex align-items-center justify-content-center mb-3"
+           style="width:52px;height:52px;background:linear-gradient(135deg,#2563EB,#7C3AED);border-radius:14px;box-shadow:0 4px 16px rgba(37,99,235,0.4);">
+        <i class="bi bi-eye-fill" style="font-size:1.375rem;color:white;"></i>
+      </div>
+      <h4 class="fw-bold mb-1" style="color:#F1F5F9;font-size:1.25rem;letter-spacing:-0.03em;">Crimenabi</h4>
+      <p style="color:rgba(255,255,255,0.4);font-size:0.75rem;letter-spacing:0.06em;text-transform:uppercase;">Pipeline Intelligence Platform</p>
+    </div>
 
     {% if error %}
-    <div class="alert alert-danger py-2" role="alert">
-        {{ error }}
+    <div class="alert alert-danger mb-4" role="alert">
+      <i class="bi bi-exclamation-triangle-fill"></i>
+      <span>{{ error }}</span>
     </div>
     {% endif %}
 
     <form method="POST">
-        <div class="mb-3">
-            <label class="form-label text-white-50">Username</label>
-            <input type="text" name="username" class="form-control" placeholder="Enter username" required autofocus>
+      <div class="mb-3">
+        <label class="form-label">Username</label>
+        <div style="position:relative;">
+          <i class="bi bi-person" style="position:absolute;left:0.75rem;top:50%;transform:translateY(-50%);color:rgba(255,255,255,0.3);font-size:0.875rem;"></i>
+          <input type="text" name="username" class="form-control"
+                 style="padding-left:2.25rem;"
+                 placeholder="Enter username" required autofocus>
         </div>
-        <div class="mb-4">
-            <label class="form-label text-white-50">Password</label>
-            <input type="password" name="password" class="form-control" placeholder="Enter password" required>
+      </div>
+
+      <div class="mb-4">
+        <label class="form-label">Password</label>
+        <div style="position:relative;">
+          <i class="bi bi-lock" style="position:absolute;left:0.75rem;top:50%;transform:translateY(-50%);color:rgba(255,255,255,0.3);font-size:0.875rem;"></i>
+          <input type="password" name="password" class="form-control"
+                 style="padding-left:2.25rem;"
+                 placeholder="Enter password" required>
         </div>
-        <button type="submit" class="btn btn-primary w-100 py-2 fw-semibold">Secure Login</button>
+      </div>
+
+      <button type="submit" class="btn btn-primary w-100 btn-lg" style="font-size:0.875rem;">
+        <i class="bi bi-box-arrow-in-right"></i> Sign In
+      </button>
     </form>
-    </div>
+
+    <p class="text-center mt-4" style="font-size:0.6875rem;color:rgba(255,255,255,0.2);">
+      Crimenabi &middot; Secure Pipeline Management
+    </p>
+
+  </div>
 </div>
 
 </body>

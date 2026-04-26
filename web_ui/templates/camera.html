@@ -1,305 +1,303 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Manage Camera {{ camera.id }}</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="/static/css/style.css" rel="stylesheet">
-</head>
-<body class="bg-light">
+{% extends 'base.html' %}
+{% block title %}{{ camera.name }}{% endblock %}
 
-<nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
-    <div class="container">
-        <a class="navbar-brand" href="/">Crimenabi</a>
-        <div class="d-flex">
-            <a href="/" class="btn btn-outline-light me-2 badge">Back to Dashboard</a>
-            <a href="/logout" class="btn btn-danger badge">Logout</a>
-        </div>
+{% block breadcrumb %}
+<a href="/" class="crumb" style="text-decoration:none;color:inherit;">Dashboard</a>
+<span class="crumb-sep"><i class="bi bi-chevron-right" style="font-size:0.6rem;"></i></span>
+<span class="crumb-current">{{ camera.name }} <span class="badge badge-secondary ms-1">{{ camera.id }}</span></span>
+{% endblock %}
+
+{% set active_page = 'camera_' + camera.id %}
+
+{% block topbar_actions %}
+<a href="/camera/{{ camera.id }}/ocr_region"   class="btn btn-sm btn-warning">  <i class="bi bi-bounding-box-circles"></i> OCR Region</a>
+<a href="/camera/{{ camera.id }}/calibrate"    class="btn btn-sm btn-info">     <i class="bi bi-crosshair"></i> Calibrate</a>
+<a href="/camera/{{ camera.id }}/coverage"     class="btn btn-sm btn-success">  <i class="bi bi-bounding-box"></i> Coverage</a>
+<form method="POST" action="/camera/{{ camera.id }}/delete" class="d-inline"
+      onsubmit="return confirm('Remove {{ camera.name }} ({{ camera.id }}) from config?');">
+  <button type="submit" class="btn btn-sm btn-outline-danger"><i class="bi bi-trash3"></i></button>
+</form>
+{% endblock %}
+
+{% block content %}
+
+{% if error %}
+<div class="alert alert-danger mb-4"><i class="bi bi-exclamation-triangle-fill"></i> <span>{{ error }}</span></div>
+{% endif %}
+{% if success %}
+<div class="alert alert-success mb-4"><i class="bi bi-check-circle-fill"></i> <span>{{ success }}</span></div>
+{% endif %}
+
+<div class="row g-4">
+
+  <!-- ── LEFT COLUMN ─────────────────────────────────────────────────── -->
+  <div class="col-lg-4">
+
+    <!-- Upload to S3 -->
+    <div class="card mb-3">
+      <div class="card-header">
+        <div class="card-header-title"><i class="bi bi-cloud-upload"></i> Upload to S3</div>
+      </div>
+      <div class="card-body card-body-sm">
+        <p class="form-text mb-2">Destination: <code>s3://{{ bucket }}/{{ prefix }}</code></p>
+        <form method="POST" enctype="multipart/form-data">
+          <input type="hidden" name="action" value="upload">
+          <div class="mb-2">
+            <input class="form-control form-control-sm" type="file" name="video_file" accept="video/*" required>
+          </div>
+          <button type="submit" class="btn btn-primary btn-sm w-100">
+            <i class="bi bi-cloud-upload"></i> Upload
+          </button>
+        </form>
+      </div>
     </div>
-</nav>
 
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <h3 class="mb-0">{{ camera.name }} <span class="badge bg-secondary">{{ camera.id }}</span></h3>
-        <div>
-            <a href="/camera/{{ camera.id }}/ocr_region" class="btn btn-warning me-2">Set OCR Region</a>
-            <a href="/camera/{{ camera.id }}/calibrate" class="btn btn-info me-2">Calibrate Homography</a>
-            <a href="/camera/{{ camera.id }}/coverage" class="btn btn-success me-2">🗺 Draw Coverage</a>
-            <form method="POST" action="/camera/{{ camera.id }}/delete" class="d-inline" onsubmit="return confirm('Remove camera {{ camera.name }} ({{ camera.id }}) from config?');">
-                <button type="submit" class="btn btn-outline-danger">Delete Camera</button>
-            </form>
+    <!-- Google Drive Import -->
+    <div class="card mb-3" style="border-color:#4285F4;">
+      <div class="card-header" style="border-color:rgba(66,133,244,0.15);">
+        <div class="card-header-title">
+          <svg width="14" height="14" viewBox="0 0 87.3 78" style="flex-shrink:0;">
+            <path d="m6.6 66.85 3.85 6.65c.8 1.4 1.95 2.5 3.3 3.3l13.75-23.8h-27.5c0 1.55.4 3.1 1.2 4.5z" fill="#0066da"/>
+            <path d="m43.65 25-13.75-23.8c-1.35.8-2.5 1.9-3.3 3.3l-25.4 44a9.06 9.06 0 0 0 -1.2 4.5h27.5z" fill="#00ac47"/>
+            <path d="m73.55 76.8c1.35-.8 2.5-1.9 3.3-3.3l1.6-2.75 7.65-13.25c.8-1.4 1.2-2.95 1.2-4.5h-27.502l5.852 11.5z" fill="#ea4335"/>
+            <path d="m43.65 25 13.75-23.8c-1.35-.8-2.9-1.2-4.5-1.2h-18.5c-1.6 0-3.15.45-4.5 1.2z" fill="#00832d"/>
+            <path d="m59.8 53h-32.3l-13.75 23.8c1.35.8 2.9 1.2 4.5 1.2h50.8c1.6 0 3.15-.45 4.5-1.2z" fill="#2684fc"/>
+            <path d="m73.4 26.5-12.7-22c-.8-1.4-1.95-2.5-3.3-3.3l-13.75 23.8 16.15 27h27.45c0-1.55-.4-3.1-1.2-4.5z" fill="#ffba00"/>
+          </svg>
+          Import from Google Drive
         </div>
+      </div>
+      <div class="card-body card-body-sm">
+        <form method="POST" id="driveImportForm">
+          <input type="hidden" name="action" value="drive_import">
+          <div class="mb-2">
+            <label class="form-label">Drive URL(s)</label>
+            <textarea class="form-control font-mono" name="drive_url" rows="5"
+                      placeholder="Folder URL or one file link per line&#10;https://drive.google.com/drive/folders/ABC&#10;https://drive.google.com/file/d/ID1/view"
+                      required style="font-size:0.6875rem;"></textarea>
+          </div>
+          <div class="alert alert-info mb-2" style="font-size:0.6875rem;">
+            <i class="bi bi-info-circle-fill flex-shrink-0"></i>
+            <div>Set Drive sharing to <strong>"Anyone with the link"</strong> before importing.
+            Accepts folder URL, one link per line, or comma-separated links.</div>
+          </div>
+          <button type="submit" class="btn btn-primary btn-sm w-100"
+                  onclick="this.disabled=true;this.innerHTML='<span class=\'spinner-border spinner-border-sm me-1\'></span>Importing…';this.form.submit();">
+            <i class="bi bi-google"></i> Import → S3
+          </button>
+        </form>
+      </div>
     </div>
-    
-    {% if error %}
-    <div class="alert alert-danger">{{ error }}</div>
-    {% endif %}
-    {% if success %}
-    <div class="alert alert-success">{{ success }}</div>
-    {% endif %}
 
-    <div class="row">
-        <div class="col-md-4">
-            <div class="card shadow-sm mb-4">
-                <div class="card-header bg-white"><h6 class="mb-0">Upload Video to S3</h6></div>
-                <div class="card-body">
-                    <form method="POST" enctype="multipart/form-data">
-                        <input type="hidden" name="action" value="upload">
-                        <div class="mb-3">
-                            <label class="form-label text-muted small">Destination: s3://{{ bucket }}/{{ prefix }}</label>
-                            <input class="form-control" type="file" name="video_file" accept="video/*" required>
-                        </div>
-                        <button type="submit" class="btn btn-primary w-100">Upload to S3</button>
-                    </form>
-                </div>
-            </div>
-
-            <div class="card shadow-sm mb-4 border-primary">
-                <div class="card-header bg-primary text-white"><h6 class="mb-0">📁 Import from Google Drive</h6></div>
-                <div class="card-body">
-                    <form method="POST" id="driveImportForm">
-                        <input type="hidden" name="action" value="drive_import">
-                        <div class="mb-2">
-                            <label class="form-label fw-semibold">Google Drive URL(s)</label>
-                            <textarea class="form-control font-monospace" name="drive_url" rows="6"
-                                      placeholder="Option A — one folder URL (up to 50 files):&#10;https://drive.google.com/drive/folders/ABC123...&#10;&#10;Option B — one file link per line (no limit):&#10;https://drive.google.com/file/d/ID1/view&#10;https://drive.google.com/file/d/ID2/view&#10;&#10;Option C — comma-separated file links (no limit):&#10;https://drive.google.com/file/d/ID1/view, https://drive.google.com/file/d/ID2/view, ..."
-                                      required></textarea>
-                        </div>
-
-                        <div class="alert alert-info py-2 small mb-2">
-                            <strong>Three modes — all work:</strong><br>
-                            <b>A. Folder URL</b> — one folder link (≤ 50 files).<br>
-                            <b>B. One link per line</b> — paste each file's sharing link on a new line. No file-count limit.<br>
-                            <b>C. Comma-separated</b> — paste all links separated by commas in one go. No file-count limit.
-                        </div>
-                        <div class="alert alert-warning py-2 small mb-3">
-                            ⚠️ Set Drive sharing to <strong>"Anyone with the link"</strong> before importing.
-                            All files will be uploaded to <code>s3://{{ bucket }}/{{ prefix }}</code>.
-                        </div>
-
-                        <div class="mb-3 p-2 bg-light rounded border small">
-                            <strong>How to get individual file links for a large folder:</strong><br>
-                            1. Open the Google Drive folder<br>
-                            2. Select all files → right-click → <em>Share</em> → set to "Anyone with the link"<br>
-                            3. Right-click each file → <em>Get link</em> → paste here, one per line<br>
-                            <em>Or use Google Takeout / rclone for very large datasets.</em>
-                        </div>
-
-                        <button type="submit" class="btn btn-primary w-100"
-                                onclick="this.disabled=true;this.innerHTML='⏳ Downloading &amp; Uploading… please wait (large folders may take several minutes)';this.form.submit();">
-                            Import Videos from Drive → S3
-                        </button>
-                    </form>
-                </div>
-            </div>
-
-            <div class="card shadow-sm">
-                <div class="card-header bg-white"><h6 class="mb-0">Create S3 Folder</h6></div>
-                <div class="card-body">
-                    <form method="POST">
-                        <input type="hidden" name="action" value="create_folder">
-                        <div class="mb-3">
-                            <input type="text" name="folder_name" class="form-control" placeholder="Folder Name" required>
-                        </div>
-                        <button type="submit" class="btn btn-outline-secondary w-100">Create Folder</button>
-                    </form>
-                </div>
-            </div>
-            
-            <div class="card shadow-sm mt-4">
-                <div class="card-header bg-white"><h5 class="mb-0 text-success">Lens Calibration</h5></div>
-                <div class="card-body">
-                    <p class="small text-muted mb-3">Upload a short raw video or static image of a calibration pattern to calculate lens distortion (run headlessly).</p>
-                    
-                    <div id="calibrationStatus" class="mb-3 d-none">
-                        <div class="alert alert-info py-2 d-flex align-items-center">
-                            <div class="spinner-border spinner-border-sm me-2" role="status"></div>
-                            <span id="statusText">Calibration in progress...</span>
-                        </div>
-                        <pre id="logPreview" class="bg-dark text-light p-2 small" style="max-height: 100px; overflow: auto; font-size: 0.7rem;"></pre>
-                    </div>
-
-                    <form action="/camera/{{ camera.id }}/intrinsic" method="POST" enctype="multipart/form-data" id="intrinsicForm">
-                        <div class="mb-3">
-                            <label class="form-label small mb-1">Calibration Method:</label>
-                            <select name="method" class="form-select form-select-sm" required>
-                                <option value="chessboard">Checkerboard (Video)</option>
-                                <option value="lines">Straight Lines (Image)</option>
-                                <option value="circles">Circle Grid (Video/Image)</option>
-                            </select>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label small mb-1">Source File (Optional):</label>
-                            <input class="form-control form-control-sm" type="file" name="calibration_video" accept="video/*,image/*">
-                            <div class="form-text" style="font-size: 0.75rem;">
-                                Leave blank to auto-extract a frame from your configured S3 video source (recommended for S3 cameras).<br>
-                                <strong>Note:</strong> For <em>chessboard</em> or <em>circle grid</em> methods, upload a dedicated calibration video for best accuracy.
-                            </div>
-                        </div>
-                        <button type="submit" class="btn btn-outline-success btn-sm w-100" id="runIntrinsicBtn">Run Intrinsic Calibration</button>
-                    </form>
-
-                    <div id="calibrationResult" class="mt-4 d-none">
-                        <h6 class="small fw-bold">Latest Calibration Result:</h6>
-                        <a href="#" id="resultImageLink" target="_blank">
-                            <img id="resultImage" src="" class="img-fluid rounded border shadow-sm mb-2" alt="Calibration Result">
-                        </a>
-                        <div class="text-center">
-                            <span class="badge bg-success">Success</span>
-                            <small class="text-muted d-block mt-1" style="font-size: 0.7rem;">Click image to expand</small>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-
-        <div class="col-md-8">
-            <div class="card shadow-sm">
-                <div class="card-header bg-white d-flex justify-content-between align-items-center">
-                    <h6 class="mb-0">S3 Contents</h6>
-                    <span class="badge bg-light text-dark border">s3://{{ bucket }}/{{ prefix }}</span>
-                </div>
-                <div class="card-body p-0">
-                    <table class="table table-hover mb-0">
-                        <thead class="table-light">
-                            <tr>
-                                <th>Name</th>
-                                <th>Type</th>
-                                <th>Size</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for file in s3_files %}
-                            <tr>
-                                <td>
-                                    {% if file.type == 'Folder' %}
-                                    <span class="fs-5 me-1">📁</span> {{ file.name }}
-                                    {% else %}
-                                    <span class="fs-5 me-1">📄</span> {{ file.name }}
-                                    {% endif %}
-                                </td>
-                                <td><span class="badge bg-secondary">{{ file.type }}</span></td>
-                                <td>{{ file.size }}</td>
-                                <td class="text-end">
-                                    {% if file.type == 'Video File' and file.url %}
-                                    <button class="btn btn-sm btn-success me-1" onclick="previewVideo('{{ file.url }}', '{{ file.name }}')">▶ Preview</button>
-                                    <a class="btn btn-sm btn-outline-primary me-1" href="{{ file.url }}" target="_blank">Download</a>
-                                    {% elif file.type == 'File' and file.url %}
-                                    <a class="btn btn-sm btn-outline-primary me-1" href="{{ file.url }}" target="_blank">Download</a>
-                                    {% endif %}
-                                    
-                                    {% if file.type != 'Folder' %}
-                                    <form method="POST" class="d-inline" onsubmit="return confirm('Delete {{ file.name }} from S3? This action cannot be undone.')">
-                                        <input type="hidden" name="action" value="delete">
-                                        <input type="hidden" name="file_key" value="{{ file.name }}">
-                                        <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
-                                    </form>
-                                    {% else %}
-                                    <form method="POST" class="d-inline" onsubmit="return confirm('WARNING: Delete folder {{ file.name }} and ALL its contents? This action cannot be undone.')">
-                                        <input type="hidden" name="action" value="delete">
-                                        <input type="hidden" name="file_key" value="{{ file.name }}">
-                                        <button type="submit" class="btn btn-sm btn-outline-danger">Delete Folder</button>
-                                    </form>
-                                    {% endif %}
-                                </td>
-                            </tr>
-                            {% else %}
-                            <tr>
-                                <td colspan="3" class="text-center text-muted py-4">No files found in this S3 location.</td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
+    <!-- Create Folder -->
+    <div class="card mb-3">
+      <div class="card-header">
+        <div class="card-header-title"><i class="bi bi-folder-plus"></i> Create S3 Folder</div>
+      </div>
+      <div class="card-body card-body-sm">
+        <form method="POST" class="d-flex gap-2">
+          <input type="hidden" name="action" value="create_folder">
+          <input type="text" name="folder_name" class="form-control form-control-sm" placeholder="Folder name" required>
+          <button type="submit" class="btn btn-outline-secondary btn-sm">
+            <i class="bi bi-plus-lg"></i>
+          </button>
+        </form>
+      </div>
     </div>
+
+    <!-- Lens Calibration -->
+    <div class="card">
+      <div class="card-header">
+        <div class="card-header-title"><i class="bi bi-camera2 text-success"></i> Lens Calibration</div>
+      </div>
+      <div class="card-body card-body-sm">
+        <p class="form-text mb-3">Upload a calibration video/image to calculate lens distortion.</p>
+
+        <div id="calibrationStatus" class="mb-3 d-none">
+          <div class="alert alert-info" style="font-size:0.75rem;">
+            <span class="spinner-border spinner-border-sm me-2 flex-shrink-0"></span>
+            <span id="statusText">Calibration in progress…</span>
+          </div>
+          <div class="log-terminal" id="logPreview"></div>
+        </div>
+
+        <form action="/camera/{{ camera.id }}/intrinsic" method="POST"
+              enctype="multipart/form-data" id="intrinsicForm">
+          <div class="mb-2">
+            <label class="form-label">Method</label>
+            <select name="method" class="form-select form-select-sm" required>
+              <option value="chessboard">Checkerboard (Video)</option>
+              <option value="lines">Straight Lines (Image)</option>
+              <option value="circles">Circle Grid (Video/Image)</option>
+            </select>
+          </div>
+          <div class="mb-2">
+            <label class="form-label">Source File <span class="form-hint">(optional)</span></label>
+            <input class="form-control form-control-sm" type="file" name="calibration_video" accept="video/*,image/*">
+            <div class="form-text">Leave blank to auto-extract from S3 source.</div>
+          </div>
+          <button type="submit" class="btn btn-outline-success btn-sm w-100" id="runIntrinsicBtn">
+            <i class="bi bi-play-fill"></i> Run Calibration
+          </button>
+        </form>
+
+        <div id="calibrationResult" class="mt-3 d-none">
+          <p class="form-label mb-1">Latest Result</p>
+          <a href="#" id="resultImageLink" target="_blank">
+            <img id="resultImage" src="" class="img-fluid rounded border w-100" alt="Calibration Result">
+          </a>
+          <span class="badge badge-success mt-1"><i class="bi bi-check-circle"></i> Calibrated</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ── RIGHT COLUMN ─────────────────────────────────────────────────── -->
+  <div class="col-lg-8">
+    <div class="card">
+      <div class="card-header">
+        <div class="card-header-title"><i class="bi bi-cloud"></i> S3 Contents</div>
+        <span class="badge badge-secondary font-mono">s3://{{ bucket }}/{{ prefix }}</span>
+      </div>
+      <div class="table-responsive p-0">
+        <table class="table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Type</th>
+              <th>Size</th>
+              <th class="text-end" style="padding-right:1.25rem;">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for file in s3_files %}
+            <tr>
+              <td class="fw-medium">
+                {% if file.type == 'Folder' %}
+                <i class="bi bi-folder-fill text-warning me-2"></i>{{ file.name }}
+                {% else %}
+                <i class="bi bi-file-earmark-play text-primary me-2"></i>{{ file.name }}
+                {% endif %}
+              </td>
+              <td><span class="badge badge-secondary">{{ file.type }}</span></td>
+              <td class="text-muted">{{ file.size }}</td>
+              <td class="text-end" style="padding-right:1.25rem;">
+                <div class="d-flex justify-content-end gap-2">
+                  {% if file.type == 'Video File' and file.url %}
+                  <button class="btn btn-xs btn-success"
+                          onclick="previewVideo('{{ file.url }}', '{{ file.name }}')">
+                    <i class="bi bi-play-fill"></i>
+                  </button>
+                  <a class="btn btn-xs btn-outline-primary" href="{{ file.url }}" target="_blank">
+                    <i class="bi bi-download"></i>
+                  </a>
+                  {% elif file.type == 'File' and file.url %}
+                  <a class="btn btn-xs btn-outline-primary" href="{{ file.url }}" target="_blank">
+                    <i class="bi bi-download"></i>
+                  </a>
+                  {% endif %}
+                  <form method="POST" class="d-inline"
+                        onsubmit="return confirm('Delete {{ file.name }} from S3? Cannot be undone.')">
+                    <input type="hidden" name="action" value="delete">
+                    <input type="hidden" name="file_key" value="{{ file.name }}">
+                    <button type="submit" class="btn btn-xs btn-outline-danger"><i class="bi bi-trash3"></i></button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+            {% else %}
+            <tr>
+              <td colspan="4" class="text-center py-5 text-muted">
+                <i class="bi bi-cloud" style="font-size:2rem;display:block;margin-bottom:0.5rem;"></i>
+                No files at this S3 location.
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
 </div>
 
 <!-- Video Preview Modal -->
 <div class="modal fade" id="previewModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-xl modal-dialog-centered">
-        <div class="modal-content bg-dark text-light">
-            <div class="modal-header border-secondary">
-                <h5 class="modal-title" id="previewModalLabel">Video Preview</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
-            </div>
-            <div class="modal-body p-0">
-                <video id="previewVideo" width="100%" height="auto" class="w-100 rounded-bottom" controls>
-                    <source src="" type="video/mp4">
-                    Your browser does not support the video tag.
-                </video>
-            </div>
-        </div>
+  <div class="modal-dialog modal-xl modal-dialog-centered">
+    <div class="modal-content" style="background:#0C1220;border-color:rgba(255,255,255,0.1);">
+      <div class="modal-header" style="border-color:rgba(255,255,255,0.08);">
+        <h5 class="modal-title text-white" style="font-size:0.875rem;" id="previewModalLabel">Preview</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-0">
+        <video id="previewVideo" width="100%" class="d-block" controls
+               style="border-radius:0 0 var(--radius-lg) var(--radius-lg);">
+          <source src="" type="video/mp4">
+        </video>
+      </div>
     </div>
+  </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+{% endblock %}
+
+{% block extra_js %}
 <script>
-    const camId = "{{ camera.id }}";
-    const statusDiv = document.getElementById('calibrationStatus');
-    const statusText = document.getElementById('statusText');
-    const logPreview = document.getElementById('logPreview');
-    const resultDiv = document.getElementById('calibrationResult');
-    const resultImg = document.getElementById('resultImage');
-    const resultLink = document.getElementById('resultImageLink');
-    const runBtn = document.getElementById('runIntrinsicBtn');
+const camId = "{{ camera.id }}";
 
-    function checkStatus() {
-        fetch(`/api/camera/${camId}/status`)
-            .then(response => response.json())
-            .then(data => {
-                const intrinsicJob = data.jobs.intrinsic;
-                
-                if (intrinsicJob) {
-                    if (intrinsicJob.status === 'running') {
-                        statusDiv.classList.remove('d-none');
-                        statusText.innerText = "Calibration in progress...";
-                        logPreview.innerText = intrinsicJob.logs;
-                        runBtn.disabled = true;
-                        runBtn.innerText = "⏳ Processing...";
-                    } else if (intrinsicJob.status === 'finished') {
-                        statusDiv.classList.add('d-none');
-                        runBtn.disabled = false;
-                        runBtn.innerText = "Run Intrinsic Calibration";
-                    } else if (intrinsicJob.status === 'failed') {
-                        statusDiv.classList.remove('d-none');
-                        statusDiv.querySelector('.alert').className = "alert alert-danger py-2";
-                        statusText.innerText = "Calibration Failed";
-                        logPreview.innerText = intrinsicJob.logs;
-                        runBtn.disabled = false;
-                        runBtn.innerText = "Retry Calibration";
-                    }
-                }
+function previewVideo(url, name) {
+  document.getElementById('previewModalLabel').textContent = name;
+  document.getElementById('previewVideo').src = url;
+  new bootstrap.Modal(document.getElementById('previewModal')).show();
+}
 
-                if (data.intrinsic_image) {
-                    resultDiv.classList.remove('d-none');
-                    // Add timestamp to prevent caching
-                    const timestamp = new Date().getTime();
-                    resultImg.src = data.intrinsic_image + "?t=" + timestamp;
-                    resultLink.href = data.intrinsic_image + "?t=" + timestamp;
-                }
-            });
-    }
+document.getElementById('previewModal').addEventListener('hide.bs.modal', () => {
+  const v = document.getElementById('previewVideo');
+  v.pause(); v.src = '';
+});
 
-    // Check status on load and then every 3 seconds if needed
-    checkStatus();
-    setInterval(checkStatus, 3000);
-    
-    // Video Preview Logic
-    function previewVideo(url, name) {
-        document.getElementById('previewModalLabel').innerText = "Preview: " + name;
-        const videoElement = document.getElementById('previewVideo');
-        videoElement.src = url;
-        
-        const modal = new bootstrap.Modal(document.getElementById('previewModal'));
-        modal.show();
-        
-        document.getElementById('previewModal').addEventListener('hide.bs.modal', () => {
-            videoElement.pause();
-            videoElement.src = "";
-        });
-    }
+// Calibration polling
+function checkStatus() {
+  fetch('/api/camera/' + camId + '/status')
+    .then(r => r.json())
+    .then(data => {
+      const job = data.jobs && data.jobs.intrinsic;
+      const statusDiv = document.getElementById('calibrationStatus');
+      const runBtn    = document.getElementById('runIntrinsicBtn');
+
+      if (job) {
+        if (job.status === 'running') {
+          statusDiv.classList.remove('d-none');
+          document.getElementById('statusText').textContent = 'Calibration in progress…';
+          document.getElementById('logPreview').textContent = job.logs || '';
+          runBtn.disabled = true;
+          runBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Processing…';
+        } else if (job.status === 'finished') {
+          statusDiv.classList.add('d-none');
+          runBtn.disabled = false;
+          runBtn.innerHTML = '<i class="bi bi-play-fill"></i> Run Calibration';
+        } else if (job.status === 'failed') {
+          statusDiv.classList.remove('d-none');
+          statusDiv.querySelector('.alert').className = 'alert alert-danger';
+          statusDiv.querySelector('.spinner-border').style.display = 'none';
+          document.getElementById('statusText').textContent = 'Calibration failed';
+          document.getElementById('logPreview').textContent = job.logs || '';
+          runBtn.disabled = false;
+          runBtn.innerHTML = '<i class="bi bi-arrow-repeat"></i> Retry';
+        }
+      }
+
+      if (data.intrinsic_image) {
+        const ts = Date.now();
+        document.getElementById('calibrationResult').classList.remove('d-none');
+        document.getElementById('resultImage').src = data.intrinsic_image + '?t=' + ts;
+        document.getElementById('resultImageLink').href = data.intrinsic_image + '?t=' + ts;
+      }
+    })
+    .catch(() => {});
+}
+checkStatus();
+setInterval(checkStatus, 3000);
 </script>
-</body>
-</html>
+{% endblock %}

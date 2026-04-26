@@ -1,118 +1,135 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pipeline Results - Crimenabi</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="/static/css/style.css" rel="stylesheet">
-</head>
-<body class="bg-light">
+{% extends 'base.html' %}
+{% block title %}Results{% endblock %}
+{% block page_heading %}Pipeline Results{% endblock %}
 
-<nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
-    <div class="container">
-        <a class="navbar-brand" href="/">Crimenabi</a>
-        <div class="d-flex">
-            <a href="/" class="btn btn-outline-light me-2 badge">Dashboard</a>
-            <a href="/geo-transform" class="btn btn-outline-light me-2 badge">Geo-Transform</a>
-            <a href="/logout" class="btn btn-danger badge">Logout</a>
-        </div>
-    </div>
-</nav>
+{% block topbar_actions %}
+{% if files %}
+<form method="POST" action="/output/delete" class="d-inline"
+      onsubmit="return confirm('Delete ALL output files? This cannot be undone.');">
+  <input type="hidden" name="action" value="all">
+  <button type="submit" class="btn btn-sm btn-danger">
+    <i class="bi bi-trash3"></i> Delete All
+  </button>
+</form>
+{% endif %}
+{% endblock %}
 
-<div class="container">
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <h3 class="mb-0">Pipeline Outputs</h3>
-        {% if files %}
-        <form method="POST" action="/output/delete" class="d-inline" onsubmit="return confirm('Delete ALL files in output/? This cannot be undone.');">
-            <input type="hidden" name="action" value="all">
-            <button type="submit" class="btn btn-danger btn-sm">Delete All Outputs</button>
-        </form>
-        {% endif %}
+{% block content %}
+
+<div class="card">
+  <div class="card-header">
+    <div class="card-header-title">
+      <i class="bi bi-folder2-open"></i> Output Files
+      <span class="badge badge-secondary ms-2">{{ files|length }} file{% if files|length != 1 %}s{% endif %}</span>
     </div>
-    
-    <div class="card shadow-sm">
-        <div class="card-header bg-white">
-            <h6 class="mb-0">Generated Files (output/)</h6>
-        </div>
-        <div class="card-body p-0">
-            <table class="table table-hover mb-0">
-                <thead class="table-light">
-                    <tr>
-                        <th>Filename</th>
-                        <th>Type</th>
-                        <th>Size</th>
-                        <th class="text-end">Action</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for file in files %}
-                    <tr>
-                        <td class="align-middle fw-medium">{{ file.name }}</td>
-                        <td class="align-middle">
-                            {% if file.type == 'Video' %}
-                            <span class="badge bg-primary">MP4 Video</span>
-                            {% elif file.type == 'Parquet' %}
-                            <span class="badge bg-warning text-dark">Parquet</span>
-                            {% else %}
-                            <span class="badge bg-success">CSV Data</span>
-                            {% endif %}
-                        </td>
-                        <td class="align-middle text-muted">{{ file.size }}</td>
-                        <td class="text-end">
-                            {% if file.type == 'Video' %}
-                            <button class="btn btn-sm btn-success me-2" data-bs-toggle="modal" data-bs-target="#videoModal{{ loop.index }}">▶ Play</button>
-                            {% endif %}
-                            <a class="btn btn-sm btn-outline-primary me-2" href="/download/{{ file.name }}" download>Download</a>
-                            <form method="POST" action="/output/delete" class="d-inline" onsubmit="return confirm('Delete {{ file.name }}?');">
-                                <input type="hidden" name="filename" value="{{ file.name }}">
-                                <button type="submit" class="btn btn-sm btn-outline-danger">Delete</button>
-                            </form>
-                        </td>
-                    </tr>
-                    {% if file.type == 'Video' %}
-                    <div class="modal fade" id="videoModal{{ loop.index }}" tabindex="-1" aria-hidden="true">
-                        <div class="modal-dialog modal-xl modal-dialog-centered">
-                            <div class="modal-content bg-dark text-light">
-                                <div class="modal-header border-secondary">
-                                    <h5 class="modal-title">{{ file.name }}</h5>
-                                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
-                                </div>
-                                <div class="modal-body p-0">
-                                    <video width="100%" height="auto" class="w-100 rounded-bottom" controls preload="none">
-                                        <source src="/download/{{ file.name }}" type="video/mp4">
-                                        Your browser does not support the video tag.
-                                    </video>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                    {% endif %}
-                    {% else %}
-                    <tr>
-                        <td colspan="4" class="text-center text-muted py-5">
-                            No generated output files found yet.<br>
-                            <small>Run the pipeline from the dashboard to generate data.</small>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </div>
+    <a href="/" class="btn btn-sm btn-outline-secondary">
+      <i class="bi bi-arrow-left"></i> Dashboard
+    </a>
+  </div>
+
+  {% if files %}
+  <div class="table-responsive p-0">
+    <table class="table">
+      <thead>
+        <tr>
+          <th>Filename</th>
+          <th>Type</th>
+          <th>Size</th>
+          <th class="text-end" style="padding-right:1.25rem;">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for file in files %}
+        <tr>
+          <td class="fw-medium">
+            {% if file.type == 'Video' %}
+            <i class="bi bi-film text-primary me-2"></i>
+            {% elif file.type == 'Parquet' %}
+            <i class="bi bi-table text-warning me-2"></i>
+            {% else %}
+            <i class="bi bi-file-earmark-spreadsheet text-success me-2"></i>
+            {% endif %}
+            {{ file.name }}
+          </td>
+          <td>
+            {% if file.type == 'Video' %}
+            <span class="badge badge-primary">MP4 Video</span>
+            {% elif file.type == 'Parquet' %}
+            <span class="badge badge-warning">Parquet</span>
+            {% else %}
+            <span class="badge badge-success">CSV Data</span>
+            {% endif %}
+          </td>
+          <td class="text-muted">{{ file.size }}</td>
+          <td class="text-end" style="padding-right:1.25rem;">
+            <div class="d-flex justify-content-end gap-2">
+              {% if file.type == 'Video' %}
+              <button class="btn btn-xs btn-success" data-bs-toggle="modal"
+                      data-bs-target="#videoModal{{ loop.index }}">
+                <i class="bi bi-play-fill"></i> Play
+              </button>
+              {% endif %}
+              <a class="btn btn-xs btn-outline-primary" href="/download/{{ file.name }}" download>
+                <i class="bi bi-download"></i> Download
+              </a>
+              <form method="POST" action="/output/delete" class="d-inline"
+                    onsubmit="return confirm('Delete {{ file.name }}?');">
+                <input type="hidden" name="filename" value="{{ file.name }}">
+                <button type="submit" class="btn btn-xs btn-outline-danger">
+                  <i class="bi bi-trash3"></i>
+                </button>
+              </form>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <div class="card-body text-center py-5">
+    <i class="bi bi-inbox" style="font-size:2.5rem;color:var(--text-light);"></i>
+    <p class="text-muted mt-3 mb-1 fw-medium">No output files yet</p>
+    <p class="text-sm text-muted">Run the pipeline from the dashboard to generate data.</p>
+    <a href="/" class="btn btn-primary btn-sm mt-2">
+      <i class="bi bi-grid-1x2-fill"></i> Go to Dashboard
+    </a>
+  </div>
+  {% endif %}
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+<!-- Video Modals -->
+{% for file in files %}
+{% if file.type == 'Video' %}
+<div class="modal fade" id="videoModal{{ loop.index }}" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-xl modal-dialog-centered">
+    <div class="modal-content" style="background:#0C1220;border-color:rgba(255,255,255,0.1);">
+      <div class="modal-header" style="border-color:rgba(255,255,255,0.08);">
+        <h5 class="modal-title text-white" style="font-size:0.875rem;">
+          <i class="bi bi-film me-2 text-primary"></i>{{ file.name }}
+        </h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body p-0">
+        <video width="100%" class="d-block" controls preload="none" style="border-radius:0 0 var(--radius-lg) var(--radius-lg);">
+          <source src="/download/{{ file.name }}" type="video/mp4">
+        </video>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+{% endfor %}
+
+{% endblock %}
+
+{% block extra_js %}
 <script>
-document.addEventListener('DOMContentLoaded', function () {
-    const modals = document.querySelectorAll('.modal');
-    modals.forEach(modal => {
-        modal.addEventListener('hide.bs.modal', () => {
-            const video = modal.querySelector('video');
-            if (video) video.pause();
-        });
-    });
+document.querySelectorAll('.modal').forEach(modal => {
+  modal.addEventListener('hide.bs.modal', () => {
+    const v = modal.querySelector('video');
+    if (v) v.pause();
+  });
 });
 </script>
-</body>
-</html>
+{% endblock %}

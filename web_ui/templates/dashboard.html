@@ -1,567 +1,523 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Pipeline Dashboard - Crimenabi</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link href="/static/css/style.css" rel="stylesheet">
-</head>
-<body class="bg-light">
+{% extends 'base.html' %}
+{% block title %}Dashboard{% endblock %}
+{% block page_heading %}Dashboard{% endblock %}
 
-<nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
-    <div class="container">
-        <a class="navbar-brand" href="/">Crimenabi</a>
-        <div class="d-flex">
-            <a href="/geo-transform" class="btn btn-outline-light me-2 badge">Geo-Transform</a>
-            <a href="/results" class="btn btn-outline-light me-2 badge">View Results</a>
-            <a href="/logout" class="btn btn-danger badge">Logout</a>
-        </div>
+{% block topbar_actions %}
+<a href="/results" class="btn btn-sm btn-secondary">
+  <i class="bi bi-file-earmark-bar-graph"></i> Results
+</a>
+{% endblock %}
+
+{% block content %}
+
+<!-- ── System Health Metrics ───────────────────────────────────────────── -->
+<div class="metric-grid mb-4" id="health-metrics">
+  <div class="metric-card">
+    <div class="metric-header">
+      <span class="metric-label">Disk Free</span>
+      <div class="metric-icon slate"><i class="bi bi-hdd-fill"></i></div>
     </div>
-</nav>
-
-<div class="container">
-
-    <!-- ── System Health Bar ─────────────────────────────────────────────── -->
-    <div id="health-bar" class="d-flex flex-wrap gap-3 align-items-center mb-3 px-3 py-2 rounded bg-white border shadow-sm small">
-        <span class="fw-semibold text-secondary me-1">System</span>
-        <span id="h-disk">💾 Disk: <span class="text-muted">…</span></span>
-        <span id="h-gpu">🎮 GPU: <span class="text-muted">…</span></span>
-        <span id="h-vram">VRAM: <span class="text-muted">…</span></span>
-        <span id="h-jobs">⚙ Jobs running: <span class="text-muted">…</span></span>
-        <span class="ms-auto text-muted" id="h-ts"></span>
+    <div class="metric-value" id="m-disk-val">—</div>
+    <div class="metric-sub" id="m-disk-sub">Loading…</div>
+    <div class="metric-bar mt-2"><div class="progress-bar" id="m-disk-bar" style="width:0%;background:#64748B;"></div></div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-header">
+      <span class="metric-label">GPU Utilisation</span>
+      <div class="metric-icon blue"><i class="bi bi-gpu-card"></i></div>
     </div>
-
-    <div class="row mb-4">
-        <div class="col-12">
-            <div class="card shadow-sm">
-                <div class="card-body">
-                    <h5 class="card-title text-primary">Pipeline Status Control</h5>
-                    <p class="text-muted">Initiate full system processing or run individual stages here.</p>
-                    
-                    {% if message %}
-                    <div class="alert alert-success">{{ message }}</div>
-                    {% endif %}
-                    {% if error %}
-                    <div class="alert alert-danger">{{ error }}</div>
-                    {% endif %}
-                    
-                    <form method="POST" action="/" class="mt-3">
-
-                        <!-- ── Camera Selection ──────────────────────────── -->
-                        <div class="p-3 mb-3 rounded border bg-white">
-                            <div class="d-flex justify-content-between align-items-center mb-2">
-                                <span class="fw-semibold">
-                                    Select Cameras
-                                    <span class="text-muted fw-normal small ms-1">— pipeline, fusion &amp; visualization will run on checked cameras only</span>
-                                </span>
-                                <span>
-                                    <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2"
-                                            onclick="document.querySelectorAll('.cam-checkbox').forEach(cb=>cb.checked=true)">
-                                        All
-                                    </button>
-                                    <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2 ms-1"
-                                            onclick="document.querySelectorAll('.cam-checkbox').forEach(cb=>cb.checked=false)">
-                                        None
-                                    </button>
-                                </span>
-                            </div>
-                            <div class="d-flex flex-wrap gap-2">
-                                {% for cam in cameras %}
-                                <div class="form-check form-check-inline border rounded px-3 py-2 bg-light mb-0"
-                                     style="min-width:120px">
-                                    <input class="form-check-input cam-checkbox" type="checkbox"
-                                           name="camera_ids" value="{{ cam.id }}"
-                                           id="cam_cb_{{ cam.id }}"
-                                           {{ 'checked' if cam.id in selected_cameras else '' }}>
-                                    <label class="form-check-label" for="cam_cb_{{ cam.id }}">
-                                        <span class="fw-semibold small">{{ cam.id }}</span><br>
-                                        <span class="text-muted" style="font-size:0.75rem">{{ cam.name }}</span>
-                                    </label>
-                                </div>
-                                {% endfor %}
-                                {% if not cameras %}
-                                <span class="text-muted small">No cameras registered yet. Add a camera below.</span>
-                                {% endif %}
-                            </div>
-                        </div>
-
-                        <!-- Pipeline settings -->
-                        <div class="row g-3 mb-3 align-items-end p-3 bg-light rounded border">
-                            <div class="col-auto">
-                                <label class="form-label fw-semibold mb-1" for="workers">
-                                    Parallel Cameras
-                                    <span class="text-muted fw-normal small">(workers)</span>
-                                </label>
-                                <input type="number" class="form-control form-control-sm" id="workers"
-                                       name="workers" value="4" min="1" max="9" style="width:80px">
-                                <div class="form-text">1–9 cameras at once</div>
-                            </div>
-                            <div class="col-auto">
-                                <label class="form-label fw-semibold mb-1" for="frame_stride">
-                                    Frame Stride
-                                </label>
-                                <select class="form-select form-select-sm" id="frame_stride" name="frame_stride" style="width:140px">
-                                    <option value="1">1 — every frame</option>
-                                    <option value="2" selected>2 — every other (2× faster)</option>
-                                    <option value="3">3 — every 3rd (3× faster)</option>
-                                </select>
-                                <div class="form-text">Skipped frames counted for timestamps</div>
-                            </div>
-                            <div class="col-auto">
-                                <label class="form-label fw-semibold mb-1" for="ocr_interval">
-                                    OCR Interval
-                                </label>
-                                <select class="form-select form-select-sm" id="ocr_interval" name="ocr_interval" style="width:160px">
-                                    <option value="0" selected>Auto (once / second)</option>
-                                    <option value="1">Every frame (slowest)</option>
-                                    <option value="30">Every 30 frames</option>
-                                    <option value="60">Every 60 frames</option>
-                                </select>
-                                <div class="form-text">OCR is the slowest step</div>
-                            </div>
-                            <div class="col-auto">
-                                <label class="form-label fw-semibold mb-1" for="classes">
-                                    Detect Classes
-                                </label>
-                                <select class="form-select form-select-sm" id="classes" name="classes" style="width:220px">
-                                    <option value="person,car,motorcycle,truck" selected>person, car, motorcycle, truck</option>
-                                    <option value="person">person only</option>
-                                    <option value="person,car,motorcycle,truck,bus">+ bus</option>
-                                    <option value="all">all COCO classes</option>
-                                </select>
-                                <div class="form-text">Detection model targets</div>
-                            </div>
-                            <div class="col-auto">
-                                <label class="form-label fw-semibold mb-1" for="confidence">
-                                    Confidence
-                                </label>
-                                <input type="number" class="form-control form-control-sm"
-                                       id="confidence" name="confidence"
-                                       value="0.50" min="0.10" max="0.95" step="0.05" style="width:90px">
-                                <div class="form-text">Min detection score</div>
-                            </div>
-                            <div class="col-auto">
-                                <label class="form-label fw-semibold mb-1" for="track_point">
-                                    Tracking Point
-                                </label>
-                                <select class="form-select form-select-sm" id="track_point" name="track_point" style="width:170px">
-                                    <option value="bottom" selected>Bottom — feet (default)</option>
-                                    <option value="center">Center — mid-body</option>
-                                    <option value="top">Top — head</option>
-                                </select>
-                                <div class="form-text">Bbox point projected to floor</div>
-                            </div>
-                        </div>
-
-                        <!-- ── Expected Date Range (timestamp repair) ─────── -->
-                        <div class="row g-3 mb-3 align-items-end p-3 bg-white rounded border">
-                            <div class="col-12 pb-0">
-                                <span class="fw-semibold small text-secondary text-uppercase letter-spacing-1">
-                                    Expected Recording Date Range
-                                </span>
-                                <span class="text-muted fw-normal small ms-1">— timestamps outside this range are auto-repaired before fusion</span>
-                            </div>
-                            <div class="col-auto">
-                                <label class="form-label fw-semibold mb-1" for="date_range_start">
-                                    Start Date
-                                </label>
-                                <input type="date" class="form-control form-control-sm"
-                                       id="date_range_start" name="date_range_start"
-                                       value="{{ fusion_cfg.expected_date_range.start if fusion_cfg and fusion_cfg.expected_date_range else '' }}"
-                                       style="width:160px">
-                            </div>
-                            <div class="col-auto">
-                                <label class="form-label fw-semibold mb-1" for="date_range_end">
-                                    End Date
-                                </label>
-                                <input type="date" class="form-control form-control-sm"
-                                       id="date_range_end" name="date_range_end"
-                                       value="{{ fusion_cfg.expected_date_range.end if fusion_cfg and fusion_cfg.expected_date_range else '' }}"
-                                       style="width:160px">
-                            </div>
-                        </div>
-
-                        <!-- ── Fusion thresholds ───────────────────────────── -->
-                        <div class="row g-3 mb-3 align-items-end p-3 bg-white rounded border">
-                            <div class="col-12 pb-0">
-                                <span class="fw-semibold small text-secondary text-uppercase letter-spacing-1">
-                                    Fusion Matching Thresholds
-                                </span>
-                            </div>
-                            <div class="col-auto">
-                                <label class="form-label fw-semibold mb-1" for="fusion_time_tol">
-                                    Time Window
-                                    <span class="text-muted fw-normal small">(seconds)</span>
-                                </label>
-                                <input type="number" class="form-control form-control-sm"
-                                       id="fusion_time_tol" name="fusion_time_tol"
-                                       value="1.0" min="0.1" max="10" step="0.1" style="width:90px">
-                                <div class="form-text">Max Δt between cameras</div>
-                            </div>
-                            <div class="col-auto">
-                                <label class="form-label fw-semibold mb-1" for="fusion_dist_tol">
-                                    Distance Threshold
-                                    <span class="text-muted fw-normal small">(meters)</span>
-                                </label>
-                                <input type="number" class="form-control form-control-sm"
-                                       id="fusion_dist_tol" name="fusion_dist_tol"
-                                       value="2.5" min="0.5" max="10" step="0.5" style="width:90px">
-                                <div class="form-text">Max floor-space distance to merge</div>
-                            </div>
-                        </div>
-
-                        <button type="submit" name="pipeline_action" value="process"
-                                class="btn btn-primary me-2 mb-2">
-                            ▶ Run Complete Pipeline
-                        </button>
-                        <button type="submit" name="pipeline_action" value="fuse"
-                                class="btn btn-secondary me-2 mb-2">
-                            Run Fusion Only
-                        </button>
-                        <button type="submit" name="pipeline_action" value="deep_repair"
-                                class="btn btn-warning me-2 mb-2"
-                                title="Repair timestamps in selected camera CSVs using the date range above">
-                            🔧 Deep Repair
-                        </button>
-                        <button type="submit" name="pipeline_action" value="visualize"
-                                class="btn btn-info text-white mb-2">
-                            Generate Visualization (MP4)
-                        </button>
-                    </form>
-                </div>
-            </div>
-        </div>
+    <div class="metric-value" id="m-gpu-val">—</div>
+    <div class="metric-sub" id="m-gpu-sub">Loading…</div>
+    <div class="metric-bar mt-2"><div class="progress-bar" id="m-gpu-bar" style="width:0%;background:#2563EB;"></div></div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-header">
+      <span class="metric-label">VRAM Usage</span>
+      <div class="metric-icon purple"><i class="bi bi-memory"></i></div>
     </div>
-    
-    {% if active_jobs %}
-    <div class="row mb-4">
-        <div class="col-12">
-            <div class="card shadow-sm border-warning">
-                <div class="card-header bg-warning text-dark"><h6 class="mb-0">Running Pipeline Jobs</h6></div>
-                <div class="card-body p-0">
-                    <table class="table table-hover mb-0">
-                        <thead>
-                            <tr>
-                                <th>Job Name</th>
-                                <th>Status</th>
-                                <th>Latest Log</th>
-                                <th class="text-end">Actions</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for job_id, job in active_jobs.items() %}
-                            <tr>
-                                <td class="align-middle fw-bold">
-                                    {{ job.name }}
-                                    {% if job.elapsed %}
-                                    <br><small class="text-muted fw-normal">
-                                        {% if job.elapsed < 60 %}{{ job.elapsed }}s
-                                        {% else %}{{ (job.elapsed // 60) }}m {{ (job.elapsed % 60) }}s{% endif %}
-                                    </small>
-                                    {% endif %}
-                                </td>
-                                <td class="align-middle">
-                                    {% if job.status == 'running' %}
-                                    <span class="badge bg-primary">▶ Running</span>
-                                    {% elif job.status == 'finished' %}
-                                    <span class="badge bg-success">✓ Finished</span>
-                                    {% elif job.status == 'failed' %}
-                                    <span class="badge bg-danger">✗ Failed</span>
-                                    {% elif job.status == 'cancelled' %}
-                                    <span class="badge bg-secondary">Cancelled</span>
-                                    {% endif %}
-                                </td>
-                                <td class="align-middle">
-                                    <pre class="mb-0 small bg-dark text-light p-2 rounded"
-                                         style="max-height:80px;overflow-y:auto;font-size:.72rem;white-space:pre-wrap;">{{ job.logs }}</pre>
-                                </td>
-                                <td class="align-middle text-end">
-                                    <a href="/api/job/{{ job_id }}/log" target="_blank"
-                                       class="btn btn-sm btn-outline-secondary mb-1">📄 Full Log</a>
-                                    {% if job.status == 'running' %}
-                                    <br><button class="btn btn-sm btn-outline-danger"
-                                            onclick="cancelJob('{{ job_id }}')">Cancel</button>
-                                    {% endif %}
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </div>
+    <div class="metric-value" id="m-vram-val">—</div>
+    <div class="metric-sub" id="m-vram-sub">Loading…</div>
+    <div class="metric-bar mt-2"><div class="progress-bar" id="m-vram-bar" style="width:0%;background:#7C3AED;"></div></div>
+  </div>
+  <div class="metric-card">
+    <div class="metric-header">
+      <span class="metric-label">Active Jobs</span>
+      <div class="metric-icon {% if active_jobs %}amber{% else %}green{% endif %}">
+        <i class="bi bi-activity"></i>
+      </div>
     </div>
-    {% endif %}
-
-    <!-- ── Floor Configuration Card ─────────────────────────────────────── -->
-    <div class="row mb-4">
-        <div class="col-12">
-            <div class="card shadow-sm">
-                <div class="card-header bg-white d-flex justify-content-between align-items-center">
-                    <h5 class="mb-0 text-primary">Floor Configuration</h5>
-                    <span class="badge bg-secondary">
-                        {{ edges_info.count }} edges &nbsp;·&nbsp; {{ edges_info.step_m }} m step
-                        {% if edges_info.is_auto %}<span class="ms-1 badge bg-warning text-dark">auto</span>{% endif %}
-                    </span>
-                </div>
-                <div class="card-body">
-                    <p class="text-muted small mb-3">
-                        Define physical floor dimensions and regenerate the virtual counting-edge grid.
-                        Use <strong>Auto-compute</strong> to derive dimensions from camera coverage polygons,
-                        or edit manually and save.
-                    </p>
-
-                    <!-- ── Save floor_config.json ─── -->
-                    <form method="POST" action="/api/floor-config" class="mb-3">
-                        <input type="hidden" name="floor_action" value="save">
-                        <div class="row g-3 align-items-end p-3 bg-light rounded border">
-                            <div class="col-12 pb-0">
-                                <span class="fw-semibold small text-secondary text-uppercase">Floor Dimensions &amp; Grid</span>
-                            </div>
-                            <div class="col-auto">
-                                <label class="form-label fw-semibold mb-1">Width (m) <span class="text-muted fw-normal small">X axis</span></label>
-                                <input type="number" class="form-control form-control-sm" name="floor_width_m"
-                                       value="{{ floor_cfg.floor_width_m }}" min="1" max="500" step="0.5" style="width:100px">
-                            </div>
-                            <div class="col-auto">
-                                <label class="form-label fw-semibold mb-1">Height (m) <span class="text-muted fw-normal small">Y axis</span></label>
-                                <input type="number" class="form-control form-control-sm" name="floor_height_m"
-                                       value="{{ floor_cfg.floor_height_m }}" min="1" max="500" step="0.5" style="width:100px">
-                            </div>
-                            <div class="col-auto">
-                                <label class="form-label fw-semibold mb-1">Origin X (m)</label>
-                                <input type="number" class="form-control form-control-sm" name="floor_origin_x_m"
-                                       value="{{ floor_cfg.floor_origin_x_m | default(0.0) }}" step="0.5" style="width:100px">
-                                <div class="form-text">Floor offset X</div>
-                            </div>
-                            <div class="col-auto">
-                                <label class="form-label fw-semibold mb-1">Origin Y (m)</label>
-                                <input type="number" class="form-control form-control-sm" name="floor_origin_y_m"
-                                       value="{{ floor_cfg.floor_origin_y_m | default(0.0) }}" step="0.5" style="width:100px">
-                                <div class="form-text">Floor offset Y</div>
-                            </div>
-                            <div class="col-auto">
-                                <label class="form-label fw-semibold mb-1">Minor Grid (m)</label>
-                                <input type="number" class="form-control form-control-sm" name="grid_cell_size_m"
-                                       value="{{ floor_cfg.grid_cell_size_m }}" min="0.5" max="10" step="0.5" style="width:90px">
-                                <div class="form-text">Small grid spacing</div>
-                            </div>
-                            <div class="col-auto">
-                                <label class="form-label fw-semibold mb-1">Major Grid (m)</label>
-                                <input type="number" class="form-control form-control-sm" name="major_grid_every_m"
-                                       value="{{ floor_cfg.major_grid_every_m }}" min="1" max="50" step="1" style="width:90px">
-                                <div class="form-text">Bold line every N m</div>
-                            </div>
-                            <div class="col-auto align-self-end">
-                                <button type="submit" class="btn btn-primary btn-sm">
-                                    💾 Save Floor Config
-                                </button>
-                            </div>
-                        </div>
-                    </form>
-
-                    <!-- ── Auto-compute from cameras ─── -->
-                    <form method="POST" action="/api/floor-config" class="d-inline me-2">
-                        <input type="hidden" name="floor_action" value="auto_compute">
-                        <button type="submit" class="btn btn-outline-secondary btn-sm">
-                            ⟳ Auto-compute from Cameras
-                        </button>
-                    </form>
-                    <small class="text-muted me-4">Reads camera coverage polygons → updates floor width &amp; height + overlap zones</small>
-
-                    <!-- ── Regenerate edges.json ─── -->
-                    <form method="POST" action="/api/floor-config" class="d-inline align-items-center">
-                        <input type="hidden" name="floor_action" value="regen_edges">
-                        <div class="d-inline-flex align-items-center gap-2">
-                            <label class="form-label mb-0 fw-semibold small">Edge step (m)</label>
-                            <input type="number" class="form-control form-control-sm" name="step_m"
-                                   value="{{ edges_info.step_m }}" min="0.5" max="10" step="0.5" style="width:80px">
-                            <button type="submit" class="btn btn-outline-warning btn-sm text-dark">
-                                ⚡ Regenerate Edges
-                            </button>
-                            <small class="text-muted">Rebuilds edges.json grid from floor dimensions</small>
-                        </div>
-                    </form>
-
-                </div>
-            </div>
-        </div>
+    <div class="metric-value" id="m-jobs-val">{{ active_jobs|length }}</div>
+    <div class="metric-sub" id="m-jobs-sub">
+      {% if active_jobs %}{{ active_jobs|length }} job(s) running{% else %}All idle{% endif %}
     </div>
-
-    <div class="d-flex justify-content-between align-items-center mt-4 mb-3">
-        <h4 class="mb-0">Registered Cameras</h4>
-        <button class="btn btn-sm btn-success shadow-sm" data-bs-toggle="modal" data-bs-target="#addCameraModal">+ Add Camera</button>
+    <div class="metric-bar mt-2">
+      <div class="progress-bar {% if active_jobs %}animated{% endif %}" id="m-jobs-bar"
+           style="width:{% if active_jobs %}100{% else %}0{% endif %}%;"></div>
     </div>
-    
-    <!-- Add Camera Modal -->
-    <div class="modal fade" id="addCameraModal" tabindex="-1" aria-labelledby="addCameraModalLabel" aria-hidden="true">
-        <div class="modal-dialog">
-            <div class="modal-content">
-                <form method="POST" action="/camera/add">
-                    <div class="modal-header">
-                        <h5 class="modal-title" id="addCameraModalLabel">Register New Camera</h5>
-                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                    </div>
-                    <div class="modal-body">
-                        <div class="mb-3">
-                            <label class="form-label fw-semibold">Camera ID</label>
-                            <input type="text" class="form-control" name="cam_id" placeholder="e.g. cam_9" required>
-                            <div class="form-text">Short ID used in filenames and logs — e.g. <code>cam_9</code></div>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label fw-semibold">Display Name</label>
-                            <input type="text" class="form-control" name="name" placeholder="e.g. North Gate" required>
-                            <div class="form-text">Human-readable label shown in the dashboard</div>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label fw-semibold">Video Source — S3 URI</label>
-                            <input type="text" class="form-control" name="source" placeholder="s3://bucket-name/videos/cam_9/" required>
-                            <div class="form-text">
-                                S3 folder containing this camera's input videos.<br>
-                                The pipeline downloads and processes every video file in this prefix.<br>
-                                <strong>Example:</strong> <code>s3://crimenabi-data-variphi/cam_9/</code>
-                            </div>
-                        </div>
-                        <div class="mb-3">
-                            <label class="form-label fw-semibold">Output Label</label>
-                            <input type="text" class="form-control" name="s3_output_folder" placeholder="e.g. pipeline_outputs" value="pipeline_outputs" required>
-                            <div class="form-text">
-                                Tag stored in camera config — used to group output CSVs.<br>
-                                Pipeline results always save to the local <code>output/</code> folder on EC2.
-                            </div>
-                        </div>
-                    </div>
-                    <div class="modal-footer">
-                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                        <button type="submit" class="btn btn-primary">Add Camera</button>
-                    </div>
-                </form>
-            </div>
-        </div>
-    </div>
-
-    <div class="row">
-        {% for cam in cameras %}
-        <div class="col-md-4 mb-4">
-            <div class="card h-100 shadow-sm">
-                <div class="card-header bg-white">
-                    <h6 class="mb-0">{{ cam.name }} <span class="badge bg-secondary float-end">{{ cam.id }}</span></h6>
-                </div>
-                <div class="card-body">
-                    <p class="small text-muted mb-2"><strong>Source:</strong> <br>
-                        <span class="text-truncate d-inline-block" style="max-width:100%;">{{ cam.source }}</span>
-                    </p>
-
-                    <!-- Setup status badges -->
-                    <div class="d-flex flex-wrap gap-1 mb-3">
-                        {% if cam.intrinsics and cam.intrinsics.calibrated %}
-                        <span class="badge bg-success">✓ Intrinsics</span>
-                        {% else %}
-                        <span class="badge bg-secondary">✗ Intrinsics</span>
-                        {% endif %}
-
-                        {% if cam.homography_matrix %}
-                        <span class="badge bg-success">✓ Homography</span>
-                        {% else %}
-                        <span class="badge bg-danger">✗ Homography</span>
-                        {% endif %}
-
-                        {% if cam.ocr_region %}
-                        <span class="badge bg-success">✓ OCR Region</span>
-                        {% else %}
-                        <span class="badge bg-danger">✗ OCR Region</span>
-                        {% endif %}
-
-                        {% if cam.floor_coverage_polygon %}
-                        <span class="badge bg-success">✓ Coverage ({{ cam.floor_coverage_polygon | length }}pts)</span>
-                        {% else %}
-                        <span class="badge bg-warning text-dark">✗ Coverage</span>
-                        {% endif %}
-                    </div>
-
-                    <a href="/camera/{{ cam.id }}" class="btn btn-sm btn-outline-primary w-100 mb-2">Manage S3 Uploads</a>
-                    <a href="/camera/{{ cam.id }}/coverage" class="btn btn-sm btn-outline-success w-100 mb-2">🗺 Draw Coverage Polygon</a>
-                    <form method="POST" action="/camera/{{ cam.id }}/delete" class="d-inline w-100" onsubmit="return confirm('Remove camera {{ cam.name }} ({{ cam.id }}) from config?');">
-                        <button type="submit" class="btn btn-sm btn-outline-danger w-100">Delete Camera</button>
-                    </form>
-                </div>
-            </div>
-        </div>
-        {% else %}
-        <div class="col-12">
-            <div class="alert alert-warning">No cameras configured in cameras.json.</div>
-        </div>
-        {% endfor %}
-    </div>
+  </div>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
-<script>
-    // ── System Health Bar ────────────────────────────────────────────────
-    function refreshHealth() {
-        fetch('/api/system-health')
-            .then(r => r.json())
-            .then(d => {
-                if (d.disk_free_gb !== null && d.disk_free_gb !== undefined) {
-                    const pct  = d.disk_used_pct;
-                    const col  = pct > 85 ? 'text-danger fw-bold' : pct > 70 ? 'text-warning fw-semibold' : 'text-success';
-                    document.getElementById('h-disk').innerHTML =
-                        `💾 Disk free: <span class="${col}">${d.disk_free_gb} GB</span> / ${d.disk_total_gb} GB (${pct}% used)`;
-                } else {
-                    document.getElementById('h-disk').innerHTML = '💾 Disk: <span class="text-muted">N/A</span>';
-                }
-                if (d.gpu_vram_used_mb !== null && d.gpu_vram_used_mb !== undefined) {
-                    const vPct = Math.round(d.gpu_vram_used_mb / d.gpu_vram_total_mb * 100);
-                    const vCol = vPct > 85 ? 'text-danger fw-bold' : vPct > 65 ? 'text-warning' : 'text-success';
-                    document.getElementById('h-gpu').innerHTML  =
-                        `🎮 GPU: <span class="${d.gpu_util_pct > 80 ? 'text-success fw-bold' : 'text-muted'}">${d.gpu_util_pct}%</span>`;
-                    document.getElementById('h-vram').innerHTML =
-                        `VRAM: <span class="${vCol}">${Math.round(d.gpu_vram_used_mb/1024*10)/10} / ${Math.round(d.gpu_vram_total_mb/1024*10)/10} GB</span>`;
-                } else {
-                    document.getElementById('h-gpu').innerHTML  = '🎮 GPU: <span class="text-muted">N/A</span>';
-                    document.getElementById('h-vram').innerHTML = '';
-                }
-                const jCol = d.running_jobs > 0 ? 'text-primary fw-bold' : 'text-muted';
-                document.getElementById('h-jobs').innerHTML =
-                    `⚙ Jobs running: <span class="${jCol}">${d.running_jobs}</span>`;
-                document.getElementById('h-ts').textContent =
-                    'Updated ' + new Date().toLocaleTimeString();
-            })
-            .catch(() => {});
-    }
-    refreshHealth();
-    setInterval(refreshHealth, 15000);   // refresh every 15 s
-
-    let _autoRefreshTimer = null;
-
-    function cancelJob(jobId) {
-        if (_autoRefreshTimer) clearTimeout(_autoRefreshTimer);
-        if(confirm("Are you sure you want to cancel this job?")) {
-            fetch(`/api/cancel_job/${jobId}`, {
-                method: 'POST'
-            })
-            .then(res => res.json())
-            .then(data => {
-                if(data.success) {
-                    location.reload();
-                } else {
-                    alert("Failed to cancel job: " + data.error);
-                    _scheduleRefresh();
-                }
-            })
-            .catch(() => { _scheduleRefresh(); });
-        } else {
-            _scheduleRefresh();
-        }
-    }
-
-    function _scheduleRefresh() {
-        {% if active_jobs %}
-        _autoRefreshTimer = setTimeout(() => { location.reload(); }, 5000);
+<!-- ── Active Jobs ─────────────────────────────────────────────────────── -->
+{% if active_jobs %}
+<div class="mb-4">
+  <div class="section-header">
+    <h6 class="section-title"><i class="bi bi-activity"></i> Running Jobs</h6>
+  </div>
+  <div class="row g-3">
+    {% for job_id, job in active_jobs.items() %}
+    <div class="col-md-6 col-lg-4">
+      <div class="job-card {{ job.status }}">
+        <div class="job-header">
+          <div>
+            <div class="job-name">
+              <span class="status-dot {% if job.status == 'running' %}running{% elif job.status == 'finished' %}online{% elif job.status == 'failed' %}error{% else %}offline{% endif %} me-1"></span>
+              {{ job.name }}
+            </div>
+            {% if job.elapsed %}
+            <div class="job-elapsed mt-1">
+              <i class="bi bi-clock me-1"></i>
+              {% if job.elapsed < 60 %}{{ job.elapsed }}s
+              {% else %}{{ job.elapsed // 60 }}m {{ job.elapsed % 60 }}s{% endif %}
+            </div>
+            {% endif %}
+          </div>
+          <div class="d-flex align-items-start gap-2">
+            {% if job.status == 'running' %}
+            <span class="badge badge-warning">Running</span>
+            {% elif job.status == 'finished' %}
+            <span class="badge badge-success">Done</span>
+            {% elif job.status == 'failed' %}
+            <span class="badge badge-danger">Failed</span>
+            {% else %}
+            <span class="badge badge-secondary">{{ job.status|capitalize }}</span>
+            {% endif %}
+            <a href="/api/job/{{ job_id }}/log" target="_blank" class="btn btn-xs btn-outline-secondary">
+              <i class="bi bi-terminal"></i>
+            </a>
+          </div>
+        </div>
+        <div class="log-terminal">{{ job.logs or '(no output yet)' }}</div>
+        {% if job.status == 'running' %}
+        <div class="mt-2">
+          <div class="progress"><div class="progress-bar animated" style="width:100%"></div></div>
+        </div>
+        <button class="btn btn-xs btn-outline-danger mt-2" onclick="cancelJob('{{ job_id }}')">
+          <i class="bi bi-stop-circle"></i> Cancel Job
+        </button>
         {% endif %}
-    }
-    _scheduleRefresh();
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
+
+<!-- ── Alerts ──────────────────────────────────────────────────────────── -->
+{% if message %}
+<div class="alert alert-success mb-4">
+  <i class="bi bi-check-circle-fill"></i> <span>{{ message }}</span>
+</div>
+{% endif %}
+{% if error %}
+<div class="alert alert-danger mb-4">
+  <i class="bi bi-exclamation-triangle-fill"></i> <span>{{ error }}</span>
+</div>
+{% endif %}
+
+<!-- ── Pipeline Control ────────────────────────────────────────────────── -->
+<div class="card mb-4">
+  <div class="card-header">
+    <div class="card-header-title"><i class="bi bi-play-circle-fill text-primary"></i> Pipeline Control</div>
+  </div>
+  <div class="card-body">
+    <form method="POST" action="/">
+
+      <!-- Camera Selection -->
+      <div class="form-panel mb-3">
+        <div class="form-panel-title">
+          <i class="bi bi-camera-video"></i> Camera Selection
+          <span class="ms-auto d-flex gap-2">
+            <button type="button" class="btn btn-xs btn-outline-secondary"
+                    onclick="document.querySelectorAll('.cam-chip input').forEach(cb=>{cb.checked=true;cb.closest('.cam-chip').classList.add('selected')})">All</button>
+            <button type="button" class="btn btn-xs btn-outline-secondary"
+                    onclick="document.querySelectorAll('.cam-chip input').forEach(cb=>{cb.checked=false;cb.closest('.cam-chip').classList.remove('selected')})">None</button>
+          </span>
+        </div>
+        <div class="cam-chip-wrapper">
+          {% for cam in cameras %}
+          <label class="cam-chip {% if cam.id in selected_cameras %}selected{% endif %}">
+            <input class="cam-cb" type="checkbox" name="camera_ids" value="{{ cam.id }}"
+                   {% if cam.id in selected_cameras %}checked{% endif %}>
+            <div class="cam-chip-id">{{ cam.id }}</div>
+            <div class="cam-chip-name">{{ cam.name }}</div>
+          </label>
+          {% else %}
+          <span class="text-muted text-sm">No cameras configured. Add one below.</span>
+          {% endfor %}
+        </div>
+      </div>
+
+      <!-- Detection & Performance Settings -->
+      <div class="form-panel mb-3">
+        <div class="form-panel-title"><i class="bi bi-sliders"></i> Detection &amp; Performance</div>
+        <div class="row g-3">
+          <div class="col-auto">
+            <label class="form-label">Workers <span class="form-hint">(parallel cameras)</span></label>
+            <input type="number" class="form-control form-control-sm" name="workers"
+                   value="4" min="1" max="9" style="width:75px">
+          </div>
+          <div class="col-auto">
+            <label class="form-label">Frame Stride</label>
+            <select class="form-select form-select-sm" name="frame_stride" style="width:160px">
+              <option value="1">1 — every frame</option>
+              <option value="2" selected>2 — every 2nd (2×)</option>
+              <option value="3">3 — every 3rd (3×)</option>
+            </select>
+          </div>
+          <div class="col-auto">
+            <label class="form-label">OCR Interval</label>
+            <select class="form-select form-select-sm" name="ocr_interval" style="width:175px">
+              <option value="0" selected>Auto (once/sec)</option>
+              <option value="1">Every frame (slow)</option>
+              <option value="30">Every 30 frames</option>
+              <option value="60">Every 60 frames</option>
+            </select>
+          </div>
+          <div class="col-auto">
+            <label class="form-label">Detect Classes</label>
+            <select class="form-select form-select-sm" name="classes" style="width:230px">
+              <option value="person,car,motorcycle,truck" selected>person, car, motorcycle, truck</option>
+              <option value="person">person only</option>
+              <option value="person,car,motorcycle,truck,bus">+ bus</option>
+              <option value="all">all COCO classes</option>
+            </select>
+          </div>
+          <div class="col-auto">
+            <label class="form-label">Confidence</label>
+            <input type="number" class="form-control form-control-sm" name="confidence"
+                   value="0.50" min="0.10" max="0.95" step="0.05" style="width:85px">
+          </div>
+          <div class="col-auto">
+            <label class="form-label">Tracking Point</label>
+            <select class="form-select form-select-sm" name="track_point" style="width:175px">
+              <option value="bottom" selected>Bottom — feet</option>
+              <option value="center">Center — mid-body</option>
+              <option value="top">Top — head</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
+      <!-- Date Range & Fusion -->
+      <div class="row g-3 mb-3">
+        <div class="col-md-6">
+          <div class="form-panel h-100">
+            <div class="form-panel-title"><i class="bi bi-calendar-range"></i> Expected Recording Range</div>
+            <div class="row g-2">
+              <div class="col">
+                <label class="form-label">Start Date</label>
+                <input type="date" class="form-control form-control-sm" name="date_range_start"
+                       value="{{ fusion_cfg.expected_date_range.start if fusion_cfg and fusion_cfg.expected_date_range else '' }}">
+              </div>
+              <div class="col">
+                <label class="form-label">End Date</label>
+                <input type="date" class="form-control form-control-sm" name="date_range_end"
+                       value="{{ fusion_cfg.expected_date_range.end if fusion_cfg and fusion_cfg.expected_date_range else '' }}">
+              </div>
+            </div>
+            <div class="form-text mt-2">Timestamps outside this range are auto-repaired before fusion.</div>
+          </div>
+        </div>
+        <div class="col-md-6">
+          <div class="form-panel h-100">
+            <div class="form-panel-title"><i class="bi bi-diagram-3"></i> Fusion Thresholds</div>
+            <div class="row g-2">
+              <div class="col">
+                <label class="form-label">Time Window <span class="form-hint">(s)</span></label>
+                <input type="number" class="form-control form-control-sm" name="fusion_time_tol"
+                       value="1.0" min="0.1" max="10" step="0.1">
+              </div>
+              <div class="col">
+                <label class="form-label">Distance <span class="form-hint">(m)</span></label>
+                <input type="number" class="form-control form-control-sm" name="fusion_dist_tol"
+                       value="2.5" min="0.5" max="10" step="0.5">
+              </div>
+            </div>
+            <div class="form-text mt-2">Max Δt and floor-space distance to merge detections.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="d-flex flex-wrap gap-2">
+        <button type="submit" name="pipeline_action" value="process" class="btn btn-primary">
+          <i class="bi bi-play-fill"></i> Run Complete Pipeline
+        </button>
+        <button type="submit" name="pipeline_action" value="fuse" class="btn btn-secondary">
+          <i class="bi bi-diagram-3"></i> Fusion Only
+        </button>
+        <button type="submit" name="pipeline_action" value="deep_repair" class="btn btn-warning"
+                title="Repair timestamps using the date range above">
+          <i class="bi bi-wrench-adjustable"></i> Deep Repair
+        </button>
+        <button type="submit" name="pipeline_action" value="visualize" class="btn btn-info">
+          <i class="bi bi-film"></i> Generate Visualization
+        </button>
+      </div>
+
+    </form>
+  </div>
+</div>
+
+<!-- ── Floor Configuration ─────────────────────────────────────────────── -->
+<div class="card mb-4">
+  <div class="card-header">
+    <div class="card-header-title"><i class="bi bi-grid-3x3-gap-fill text-muted"></i> Floor Configuration</div>
+    <span class="badge badge-secondary">
+      {{ edges_info.count }} edges &middot; {{ edges_info.step_m }}m step
+      {% if edges_info.is_auto %}<span class="ms-1 badge badge-warning">auto</span>{% endif %}
+    </span>
+  </div>
+  <div class="card-body">
+    <p class="text-sm text-muted mb-3">
+      Define physical floor dimensions and regenerate the virtual counting-edge grid.
+      Use <strong>Auto-compute</strong> to derive from camera coverage polygons, or edit manually.
+    </p>
+
+    <form method="POST" action="/api/floor-config" class="mb-3">
+      <input type="hidden" name="floor_action" value="save">
+      <div class="form-panel">
+        <div class="form-panel-title"><i class="bi bi-rulers"></i> Floor Dimensions &amp; Grid</div>
+        <div class="row g-3 align-items-end">
+          <div class="col-auto">
+            <label class="form-label">Width (m) <span class="form-hint">X</span></label>
+            <input type="number" class="form-control form-control-sm" name="floor_width_m"
+                   value="{{ floor_cfg.floor_width_m }}" min="1" max="500" step="0.5" style="width:90px">
+          </div>
+          <div class="col-auto">
+            <label class="form-label">Height (m) <span class="form-hint">Y</span></label>
+            <input type="number" class="form-control form-control-sm" name="floor_height_m"
+                   value="{{ floor_cfg.floor_height_m }}" min="1" max="500" step="0.5" style="width:90px">
+          </div>
+          <div class="col-auto">
+            <label class="form-label">Origin X (m)</label>
+            <input type="number" class="form-control form-control-sm" name="floor_origin_x_m"
+                   value="{{ floor_cfg.floor_origin_x_m | default(0.0) }}" step="0.5" style="width:90px">
+          </div>
+          <div class="col-auto">
+            <label class="form-label">Origin Y (m)</label>
+            <input type="number" class="form-control form-control-sm" name="floor_origin_y_m"
+                   value="{{ floor_cfg.floor_origin_y_m | default(0.0) }}" step="0.5" style="width:90px">
+          </div>
+          <div class="col-auto">
+            <label class="form-label">Minor Grid (m)</label>
+            <input type="number" class="form-control form-control-sm" name="grid_cell_size_m"
+                   value="{{ floor_cfg.grid_cell_size_m }}" min="0.5" max="10" step="0.5" style="width:90px">
+          </div>
+          <div class="col-auto">
+            <label class="form-label">Major Grid (m)</label>
+            <input type="number" class="form-control form-control-sm" name="major_grid_every_m"
+                   value="{{ floor_cfg.major_grid_every_m }}" min="1" max="50" step="1" style="width:90px">
+          </div>
+          <div class="col-auto align-self-end">
+            <button type="submit" class="btn btn-primary btn-sm">
+              <i class="bi bi-floppy"></i> Save Config
+            </button>
+          </div>
+        </div>
+      </div>
+    </form>
+
+    <div class="d-flex flex-wrap align-items-center gap-3">
+      <form method="POST" action="/api/floor-config">
+        <input type="hidden" name="floor_action" value="auto_compute">
+        <button type="submit" class="btn btn-outline-secondary btn-sm">
+          <i class="bi bi-arrow-repeat"></i> Auto-compute from Cameras
+        </button>
+      </form>
+
+      <form method="POST" action="/api/floor-config" class="d-flex align-items-center gap-2">
+        <input type="hidden" name="floor_action" value="regen_edges">
+        <label class="form-label mb-0 text-sm">Edge step (m)</label>
+        <input type="number" class="form-control form-control-sm" name="step_m"
+               value="{{ edges_info.step_m }}" min="0.5" max="10" step="0.5" style="width:75px">
+        <button type="submit" class="btn btn-outline-warning btn-sm">
+          <i class="bi bi-lightning-charge-fill"></i> Regenerate Edges
+        </button>
+      </form>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── Registered Cameras ──────────────────────────────────────────────── -->
+<div class="section-header mb-3">
+  <h6 class="section-title"><i class="bi bi-camera-video-fill"></i> Registered Cameras</h6>
+  <button class="btn btn-sm btn-success" data-bs-toggle="modal" data-bs-target="#addCameraModal">
+    <i class="bi bi-plus-lg"></i> Add Camera
+  </button>
+</div>
+
+<div class="row g-3 mb-4">
+  {% for cam in cameras %}
+  <div class="col-md-4 col-lg-3">
+    <div class="cam-status-card h-100">
+      <div class="cam-status-header">
+        <div>
+          <div class="fw-semibold" style="font-size:0.875rem;">{{ cam.name }}</div>
+          <span class="badge badge-secondary mt-1">{{ cam.id }}</span>
+        </div>
+        <div class="status-dot {% if cam.intrinsics and cam.intrinsics.calibrated and cam.homography_matrix and cam.ocr_region %}online{% elif cam.homography_matrix %}running{% else %}offline{% endif %}"></div>
+      </div>
+      <div class="cam-status-body">
+        <div class="cam-status-meta mb-2 truncate" title="{{ cam.source }}">
+          <i class="bi bi-cloud me-1"></i>{{ cam.source }}
+        </div>
+        <div class="cam-check-badges">
+          <span class="cam-check {% if cam.intrinsics and cam.intrinsics.calibrated %}ok{% else %}fail{% endif %}">
+            <i class="bi bi-{% if cam.intrinsics and cam.intrinsics.calibrated %}check{% else %}x{% endif %}"></i> Intrinsics
+          </span>
+          <span class="cam-check {% if cam.homography_matrix %}ok{% else %}fail{% endif %}">
+            <i class="bi bi-{% if cam.homography_matrix %}check{% else %}x{% endif %}"></i> Homography
+          </span>
+          <span class="cam-check {% if cam.ocr_region %}ok{% else %}fail{% endif %}">
+            <i class="bi bi-{% if cam.ocr_region %}check{% else %}x{% endif %}"></i> OCR
+          </span>
+          <span class="cam-check {% if cam.floor_coverage_polygon %}ok{% else %}warn{% endif %}">
+            <i class="bi bi-{% if cam.floor_coverage_polygon %}check{% else %}dash{% endif %}"></i>
+            Coverage {% if cam.floor_coverage_polygon %}({{ cam.floor_coverage_polygon|length }}pts){% endif %}
+          </span>
+        </div>
+      </div>
+      <div class="cam-status-actions">
+        <a href="/camera/{{ cam.id }}" class="btn btn-sm btn-outline-primary w-100">
+          <i class="bi bi-folder2-open"></i> Manage
+        </a>
+        <a href="/camera/{{ cam.id }}/coverage" class="btn btn-sm btn-outline-success w-100">
+          <i class="bi bi-bounding-box"></i> Coverage Polygon
+        </a>
+        <form method="POST" action="/camera/{{ cam.id }}/delete"
+              onsubmit="return confirm('Remove {{ cam.name }} ({{ cam.id }}) from config?');">
+          <button type="submit" class="btn btn-sm btn-outline-danger w-100">
+            <i class="bi bi-trash3"></i> Remove
+          </button>
+        </form>
+      </div>
+    </div>
+  </div>
+  {% else %}
+  <div class="col-12">
+    <div class="alert alert-info">
+      <i class="bi bi-info-circle-fill"></i>
+      <span>No cameras configured. Click <strong>Add Camera</strong> to get started.</span>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<!-- ── Add Camera Modal ────────────────────────────────────────────────── -->
+<div class="modal fade" id="addCameraModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <form method="POST" action="/camera/add">
+        <div class="modal-header">
+          <h5 class="modal-title"><i class="bi bi-plus-circle me-2 text-success"></i>Register New Camera</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label">Camera ID</label>
+            <input type="text" class="form-control" name="cam_id" placeholder="e.g. cam_3" required>
+            <div class="form-text">Short ID used in filenames — e.g. <code>cam_3</code></div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Display Name</label>
+            <input type="text" class="form-control" name="name" placeholder="e.g. North Gate" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Video Source — S3 URI</label>
+            <input type="text" class="form-control font-mono" name="source"
+                   placeholder="s3://bucket/prefix/cam_3/" required>
+            <div class="form-text">S3 folder containing this camera's videos.</div>
+          </div>
+          <div class="mb-3">
+            <label class="form-label">Output Label</label>
+            <input type="text" class="form-control" name="s3_output_folder"
+                   placeholder="pipeline_outputs" value="pipeline_outputs" required>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          <button type="submit" class="btn btn-primary"><i class="bi bi-plus-lg"></i> Add Camera</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// System health
+function refreshHealth() {
+  fetch('/api/system-health')
+    .then(r => r.json())
+    .then(d => {
+      // Disk
+      if (d.disk_free_gb != null) {
+        const pct = d.disk_used_pct;
+        document.getElementById('m-disk-val').textContent = d.disk_free_gb + ' GB';
+        document.getElementById('m-disk-sub').textContent = `${d.disk_total_gb} GB total · ${pct}% used`;
+        const bar = document.getElementById('m-disk-bar');
+        bar.style.width = pct + '%';
+        bar.style.background = pct > 85 ? '#DC2626' : pct > 70 ? '#D97706' : '#059669';
+      }
+      // GPU
+      if (d.gpu_util_pct != null) {
+        const pct = d.gpu_util_pct;
+        document.getElementById('m-gpu-val').textContent = pct + '%';
+        document.getElementById('m-gpu-sub').textContent = 'GPU compute utilisation';
+        const bar = document.getElementById('m-gpu-bar');
+        bar.style.width = pct + '%';
+        bar.style.background = pct > 90 ? '#D97706' : '#2563EB';
+      } else {
+        document.getElementById('m-gpu-val').textContent = 'N/A';
+        document.getElementById('m-gpu-sub').textContent = 'No GPU detected';
+      }
+      // VRAM
+      if (d.gpu_vram_used_mb != null) {
+        const used = (d.gpu_vram_used_mb / 1024).toFixed(1);
+        const total = (d.gpu_vram_total_mb / 1024).toFixed(1);
+        const pct = Math.round(d.gpu_vram_used_mb / d.gpu_vram_total_mb * 100);
+        document.getElementById('m-vram-val').textContent = used + ' GB';
+        document.getElementById('m-vram-sub').textContent = `of ${total} GB · ${pct}% used`;
+        const bar = document.getElementById('m-vram-bar');
+        bar.style.width = pct + '%';
+        bar.style.background = pct > 85 ? '#DC2626' : pct > 65 ? '#D97706' : '#7C3AED';
+      }
+      // Jobs
+      const jobs = d.running_jobs;
+      document.getElementById('m-jobs-val').textContent = jobs;
+      document.getElementById('m-jobs-sub').textContent = jobs > 0 ? jobs + ' job(s) running' : 'All idle';
+    })
+    .catch(() => {});
+}
+refreshHealth();
+setInterval(refreshHealth, 15000);
+
+// Auto-refresh when jobs are active
+{% if active_jobs %}
+setTimeout(() => location.reload(), 6000);
+{% endif %}
+
+// Cancel job
+function cancelJob(jobId) {
+  if (!confirm('Cancel this job?')) return;
+  fetch('/api/cancel_job/' + jobId, { method: 'POST' })
+    .then(r => r.json())
+    .then(d => { if (d.success) location.reload(); else alert('Error: ' + d.error); })
+    .catch(() => {});
+}
 </script>
-</body>
-</html>
+{% endblock %}
